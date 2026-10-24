@@ -320,3 +320,30 @@ def test_RecursiveSeq():
     fib = RecursiveSeq(y(n - 1) + y(n - 2), y(n), n, [0, 1])
     assert fib.coeff(3) == 2
     assert (fib + fib).coeff(3) == 4
+
+
+def test_RecursiveSeq_shifted_start():
+    y = Function('y')
+    for start in (0, 10, -3):
+        seq = RecursiveSeq(y(n - 1) + 1, y(n), n, [0], start=start)
+        assert seq.coeff(start + 2) == 2
+        assert len(seq.cache) == 3
+        assert seq.coeff(start) == 0
+        assert seq.coeff(start + 1) == 1
+        assert seq.coeff(start + 5) == 5
+        assert seq.coeff(start + 3) == 3
+        assert seq.cache == {y(start + k): k for k in range(6)}
+        raises(IndexError, lambda: seq.coeff(start - 1))
+
+
+def test_RecursiveSeq_shifted_start_higher_order():
+    y = Function('y')
+    for start in (0, 10, -3):
+        seq = RecursiveSeq(y(n - 1) + y(n - 2) + n, y(n), n,
+                           [0, 1], start=start)
+        expected = [0, 1, start + 3, 2*start + 7, 4*start + 14]
+        assert seq.coeff(start + 4) == expected[-1]
+        assert [seq.coeff(start + k) for k in range(5)] == expected
+        iterator = iter(seq)
+        assert [next(iterator) for _ in range(5)] == expected
+        assert next(iterator) == 7*start + 26
