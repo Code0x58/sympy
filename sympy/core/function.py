@@ -2332,6 +2332,9 @@ class Subs(Expr):
     (True, False)
     >>> s, ss
     (Subs(x, x, 0), Subs(y, y, 0))
+
+    Multiple substitutions with compound variables or points that depend on
+    later variables are compared structurally, preserving their order.
     """
     def __new__(cls, expr, variables, point, **assumptions):
         if not is_sequence(variables, Tuple):
@@ -2510,6 +2513,11 @@ class Subs(Expr):
         return super().__hash__()
 
     def _hashable_content(self):
+        if len(self.variables) > 1 and (
+                any(not v.is_Symbol for v in self.variables) or
+                any(p.free_symbols.intersection(self.variables[i + 1:])
+                    for i, p in enumerate(self.point[:-1]))):
+            return self.args
         return (self._expr.xreplace(self.canonical_variables),
             ) + tuple(ordered([(v, p) for v, p in
             zip(self.variables, self.point) if not self.expr.has(v)]))

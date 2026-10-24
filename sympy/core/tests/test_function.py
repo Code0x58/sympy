@@ -541,6 +541,37 @@ def test_Subs():
         f(x, g(x)), g(x))*Derivative(g(x), x) + Subs(Derivative(
         f(y, g(x)), y), y, x)
 
+
+def test_Subs_ordered_identity():
+    n, j, k = symbols('n j k')
+    cases = [
+        (f(j), (j, j + k), (j + k, n - 2), f(n - 2), f(j + k)),
+        (f(x), (x, y), (y, z), f(z), f(y)),
+        (f(x + y), (x, x + y), (0, 1), f(y), f(1)),
+        (f(x), (x, 2*x), (2*x, z), f(z), f(2*x)),
+    ]
+    for expr, variables, points, expected_first, expected_second in cases:
+        first = Subs(expr, variables, points)
+        second = Subs(expr, variables[::-1], points[::-1])
+        assert first != second
+        assert len({first, second}) == 2
+        assert first.doit() == expected_first
+        assert second.doit() == expected_second
+        assert g(first).doit() == g(expected_first)
+        assert g(second).doit() == g(expected_second)
+        assert (first + second).doit() == expected_first + expected_second
+
+
+def test_Subs_independent_identity():
+    first = Subs(f(x, y), (x, y), (0, 1))
+    second = Subs(f(x, y), (y, x), (1, 0))
+    renamed = Subs(f(t, z), (t, z), (0, 1))
+    assert first == second == renamed
+    assert hash(first) == hash(second) == hash(renamed)
+    assert first.doit() == second.doit() == renamed.doit() == f(0, 1)
+    assert Subs(f(x**2), x**2, 0) == Subs(f(y**2), y**2, 0)
+
+
 def test_doitdoit():
     done = Derivative(f(x, g(x)), x, g(x)).doit()
     assert done == done.doit()
