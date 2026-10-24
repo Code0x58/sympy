@@ -703,6 +703,8 @@ def test_diff():
     assert Sum(x*y, (x, 1, 3), (a, 2, 5)).diff(y).doit() == \
         Sum(x*y, (x, 1, 3), (a, 2, 5)).doit().diff(y) == 24
     assert Sum(x, (x, 1, 2)).diff(y) == 0
+    assert Sum(x**(n + 1), (n, 0, 2)).diff(x, 2).doit().subs(x, 0) == 2
+    assert Sum(x**(n - 1), (n, 0, 2)).diff(x).doit().subs(x, 0) is S.ComplexInfinity
 
 
 def test_hypersum():
@@ -1031,6 +1033,10 @@ def test_matrix_sum():
 
     result = Sum(A, (n, 0, 3)).doit()
     assert result.__class__ == ImmutableSparseMatrix
+
+    A = Matrix([[x**(n + 1), 0], [0, x]])
+    result = Sum(A, (n, 0, 2)).diff(x, 2).doit()
+    assert result.subs(x, 0) == Matrix([[2, 0], [0, 0]])
 
 
 def test_failing_matrix_sum():
