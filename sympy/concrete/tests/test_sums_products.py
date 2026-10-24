@@ -705,6 +705,31 @@ def test_diff():
     assert Sum(x, (x, 1, 2)).diff(y) == 0
 
 
+def test_diff_finite_power_sum_at_zero():
+    for base in (Symbol('x'), Symbol('x', real=True)):
+        for limits in ((n, 0, 2), (n, 0, 4), (n, 2, 4), (n, 4, 0)):
+            source = Sum(base**(n + 1), limits)
+            polynomial = source.doit()
+            for order in range(1, 6):
+                result = source.diff(base, order).doit()
+                expected = polynomial.diff(base, order)
+                assert result.expand() == expected.expand()
+                assert result.subs(base, 0) == expected.subs(base, 0)
+
+
+def test_diff_finite_power_sum_with_pole():
+    source = Sum(x**(n - 1), (n, 0, 2))
+    assert source.diff(x).doit() == 1 - 1/x**2
+    assert source.diff(x).doit().subs(x, 0) is S.ComplexInfinity
+
+
+def test_diff_finite_matrix_power_sum_at_zero():
+    source = Sum(Matrix([[x**(n + 1), 0], [0, x]]), (n, 0, 2))
+    result = source.diff(x, 2).doit()
+    assert result == Matrix([[6*x + 2, 0], [0, 0]])
+    assert result.subs(x, 0) == Matrix([[2, 0], [0, 0]])
+
+
 def test_hypersum():
     assert simplify(summation(x**n/fac(n), (n, 1, oo))) == -1 + exp(x)
     assert summation((-1)**n * x**(2*n) / fac(2*n), (n, 0, oo)) == cos(x)
