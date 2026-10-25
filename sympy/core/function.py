@@ -2335,7 +2335,7 @@ class Subs(Expr):
 
     For multiple expression targets, the comparison key keeps their order if
     a target is compound or repeated, or an earlier point contains a later
-    target. Function targets retain their bindings too; for derivatives,
+    target. Class targets retain their bindings too; for derivatives,
     function replacements precede expression replacements.
     """
     def __new__(cls, expr, variables, point, **assumptions):
@@ -2516,8 +2516,8 @@ class Subs(Expr):
         key = (normalized,) + tuple(Tuple(*vp) for vp in ordered(unused))
 
         # Tags keep ordered (True) and normalized-only (False) keys distinct.
-        # xreplace does not replace function heads, so retain their bindings.
-        if any(isinstance(v, FunctionClass) for v in variables):
+        # Class targets are not expression instances; retain their bindings.
+        if any(isinstance(v, type) for v in variables):
             args = super()._hashable_content()
             if isinstance(self.expr, Derivative):
                 # Subs.doit applies function replacements first for derivatives.
@@ -2527,8 +2527,7 @@ class Subs(Expr):
                 args = (self.expr, Tuple(*variables), Tuple(*point))
             return (True,) + key + args
 
-        if (len(variables) > 1 and
-                all(isinstance(v, (Basic, type)) for v in variables)):
+        if len(variables) > 1 and all(isinstance(v, Basic) for v in variables):
             # later holds targets to the right; retain order if a point
             # depends on one, or targets are compound or repeated.
             later = set()

@@ -649,6 +649,18 @@ def test_Subs_recreated_function_class_identity():
     assert first_hash == hash(second)
 
 
+def test_Subs_symbol_class_target_identity():
+    positive = Symbol('a', positive=True)
+    negative = Symbol('a', negative=True)
+    first = Subs(f(x, y), (Symbol, x, y), (0, positive, negative))
+    second = Subs(f(x, y), (Symbol, x, y), (0, negative, positive))
+    assert first != second
+    assert first.doit() == f(positive, negative)
+    assert second.doit() == f(negative, positive)
+    assert h(first).doit() == h(f(positive, negative))
+    assert h(second).doit() == h(f(negative, positive))
+
+
 def test_Subs_self_mappings():
     source = Derivative(sin(x + y), x)
     first = Subs(source, (f, x, y), (f, x, 0))
