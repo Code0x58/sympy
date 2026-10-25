@@ -2396,7 +2396,7 @@ class Subs(Expr):
                 continue
             break
 
-        obj = Expr.__new__(cls, expr, variables, point)
+        obj = Expr.__new__(cls, expr, Tuple(*variables), point)
         obj._expr = expr.xreplace(dict(reps))
         return obj
 
