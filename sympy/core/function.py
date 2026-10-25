@@ -36,6 +36,7 @@ from typing import Any
 from collections.abc import Iterable
 import copyreg
 from decimal import Decimal
+from functools import wraps
 from numbers import Number
 
 from .add import Add
@@ -420,9 +421,19 @@ class Application(Basic, metaclass=FunctionClass):
             return new(*[i._subs(old, new) for i in self.args])
 
 
-def _function_cache_key(args, kwargs):
-    if (args[0] if args else kwargs.get('cls')) is Function:
-        return _function_metadata_key(kwargs)
+def _cacheit_function(func):
+    """Include normalized metadata in the undefined-function cache key."""
+    @cacheit
+    @wraps(func)
+    def cached(key, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    @wraps(cached)
+    def wrapper(cls, *args, **kwargs):
+        key = _function_metadata_key(kwargs) if cls is Function else None
+        return cached(key, cls, *args, **kwargs)
+
+    return wrapper
 
 
 class Function(Application, Expr):
@@ -487,7 +498,7 @@ class Function(Application, Expr):
     def _diff_wrt(self):
         return False
 
-    @cacheit(kwargs_key=_function_cache_key)
+    @_cacheit_function
     def __new__(cls, *args, **options) -> type[AppliedUndef]:  # type: ignore
         # Handle calls like Function('f')
         if cls is Function:
@@ -938,17 +949,23 @@ _undef_sage_helper = UndefSageHelper()
 
 
 def _canonical_function_metadata(value):
-    """Normalize numeric metadata without changing reconstruction arguments."""
+    """Canonicalize metadata, retaining the SymPy type of each container."""
     if isinstance(value, Basic):
+        if isinstance(value, Tuple):
+            return (value.func, tuple(map(_canonical_function_metadata, value.args)))
+        if getattr(value, 'is_FiniteSet', False):
+            return (value.func, frozenset(map(_canonical_function_metadata, value.args)))
         return value
     if isinstance(value, Number):
         if isinstance(value, Decimal) and value.is_finite():
             return Rational(*value.as_integer_ratio())
         return sympify(value)
     if isinstance(value, tuple) and type(value).__eq__ is tuple.__eq__:
-        return tuple(map(_canonical_function_metadata, value))
+        return (Tuple, tuple(map(_canonical_function_metadata, value)))
     if isinstance(value, frozenset) and type(value).__eq__ is frozenset.__eq__:
-        return frozenset(map(_canonical_function_metadata, value))
+        from sympy.sets.sets import FiniteSet
+        cls = FiniteSet if value else S.EmptySet.func
+        return (cls, frozenset(map(_canonical_function_metadata, value)))
     return value
 
 
@@ -2557,30 +2574,28 @@ class Subs(Expr):
             self._expr, self.canonical_variables)
         unused = [(v, p) for v, p in zip(variables, point)
                   if not self.expr.has(v)]
-        key = Tuple(normalized, *(Tuple(*vp) for vp in ordered(unused)))
-        args = ()
+        key = (Tuple(normalized, *(Tuple(*vp) for vp in ordered(unused))),)
 
         # Class targets are not expression instances; retain their bindings.
         if any(isinstance(v, type) for v in variables):
-            args = super()._hashable_content()
             if isinstance(self.expr, Derivative):
                 # Subs.doit applies function replacements first for derivatives.
                 functions, expressions = sift(zip(variables, point),
                     lambda vp: isinstance(vp[0], FunctionClass), binary=True)
                 variables, point = zip(*(functions + expressions))
-                args = (self.expr, Tuple(*variables), Tuple(*point))
-        elif len(variables) > 1:
+                return key + (self.expr, Tuple(*variables), Tuple(*point))
+            return key + super()._hashable_content()
+        if len(variables) > 1:
             # later holds targets to the right; retain order if a point
             # depends on one, or targets are compound or repeated.
             later = set()
             for variable, value in zip(reversed(variables), reversed(point)):
                 if (not variable.is_Symbol or variable in later or
                         value.free_symbols & later):
-                    args = super()._hashable_content()
-                    break
+                    return key + super()._hashable_content()
                 later.add(variable)
 
-        return (key,) + args
+        return key
 
     def _eval_subs(self, old, new):
         # Subs doit will do the variables in order; the semantics

@@ -487,7 +487,9 @@ class Basic(Printable):
 
         # XXX: remove this when issue 5169 is fixed
         def inner_key(arg):
-            if isinstance(arg, (Basic, type)):
+            if isinstance(arg, Basic):
+                return arg.sort_key(order)
+            if isinstance(arg, type):
                 return default_sort_key(arg, order=order)
             return arg
 

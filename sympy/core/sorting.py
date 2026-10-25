@@ -179,11 +179,8 @@ def default_sort_key(item, order=None):
 
 def _metadata_sort_key(item, order=None):
     from .basic import Basic
-    from .containers import Tuple
 
-    if isinstance(item, Tuple):
-        item = item.args
-    elif isinstance(item, Basic):
+    if isinstance(item, Basic):
         # Include identity fields, such as Symbol assumptions, omitted by sort_key.
         content = item._hashable_content()
         if not item.is_Number:

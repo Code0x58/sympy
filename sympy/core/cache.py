@@ -63,40 +63,19 @@ def __cacheit(maxsize):
 
         to force cacheit to check returned results mutability and consistency,
         set environment variable SYMPY_USE_CACHE to 'debug'
-
-        kwargs_key(args, kwargs) can add a key for calls with keyword arguments
-        without changing the arguments passed to the cached function.
     """
-    def func_wrapper(func=None, *, kwargs_key=None):
-        if func is None:
-            return lambda func: func_wrapper(func, kwargs_key=kwargs_key)
-        if kwargs_key is None:
-            cfunc = lru_cache(maxsize, typed=True)(func)
+    def func_wrapper(func):
+        cfunc = lru_cache(maxsize, typed=True)(func)
 
-            @wraps(func)
-            def wrapper(*args, **kwargs):
-                try:
-                    retval = cfunc(*args, **kwargs)
-                except TypeError as e:
-                    if not e.args or not e.args[0].startswith('unhashable type:'):
-                        raise
-                    retval = func(*args, **kwargs)
-                return retval
-        else:
-            @lru_cache(maxsize, typed=True)
-            def cfunc(key, *args, **kwargs):
-                return func(*args, **kwargs)
-
-            @wraps(func)
-            def wrapper(*args, **kwargs):
-                try:
-                    key = kwargs_key(args, kwargs) if kwargs else None
-                    retval = cfunc(key, *args, **kwargs)
-                except TypeError as e:
-                    if not e.args or not e.args[0].startswith('unhashable type:'):
-                        raise
-                    retval = func(*args, **kwargs)
-                return retval
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                retval = cfunc(*args, **kwargs)
+            except TypeError as e:
+                if not e.args or not e.args[0].startswith('unhashable type:'):
+                    raise
+                retval = func(*args, **kwargs)
+            return retval
 
         wrapper.cache_info = cfunc.cache_info
         wrapper.cache_clear = cfunc.cache_clear
@@ -108,18 +87,14 @@ def __cacheit(maxsize):
 ########################################
 
 
-def __cacheit_nocache(func=None, *, kwargs_key=None):
-    if func is None:
-        return lambda func: func
+def __cacheit_nocache(func):
     return func
 
 
 def __cacheit_debug(maxsize):
     """cacheit + code to check cache consistency"""
-    def func_wrapper(func=None, *, kwargs_key=None):
-        if func is None:
-            return lambda func: func_wrapper(func, kwargs_key=kwargs_key)
-        cfunc = __cacheit(maxsize)(func, kwargs_key=kwargs_key)
+    def func_wrapper(func):
+        cfunc = __cacheit(maxsize)(func)
 
         @wraps(func)
         def wrapper(*args, **kw_args):

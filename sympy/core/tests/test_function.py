@@ -660,6 +660,10 @@ def test_Subs_recreated_function_class_identity():
     (Decimal('0.1'), Rational(1, 10)),
     ((Fraction(2),), (S(2),)),
     (frozenset([Fraction(2)]), frozenset([S(2)])),
+    ((Fraction(2),), Tuple(2)),
+    (frozenset([Fraction(1, 10)]), FiniteSet(Rational(1, 10))),
+    ((frozenset([2]),), (FiniteSet(2),)),
+    (frozenset(), S.EmptySet),
     (True, S.true),
 ])
 def test_function_numeric_metadata_ordering(value, equivalent):
@@ -736,6 +740,17 @@ def test_function_identity_metadata_containers(base):
     left = Subs(f(x), f, first)
     right = Subs(f(x), f, second)
     assert left + right == right + left
+
+
+@pytest.mark.parametrize('base', [Tuple, FiniteSet])
+def test_function_metadata_container_subclasses(base):
+    class Container(base):
+        pass
+
+    first = Function('a', value=base(x))
+    second = Function('a', value=Container(x))
+    assert first != second
+    assert first(x) + second(x) == second(x) + first(x)
 
 
 @pytest.mark.parametrize('first_function, second_function', [
