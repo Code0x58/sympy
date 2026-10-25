@@ -2420,16 +2420,15 @@ class Subs(Expr):
         replacements = [(vi, pi) for vi, pi in zip(v, p) if vi != pi]
         if not replacements:
             return self.expr
-        v, p = zip(*replacements)
 
         if isinstance(e, Derivative):
             # apply functions first, e.g. f -> cos
             undone = []
-            for i, vi in enumerate(v):
+            for vi, pi in replacements:
                 if isinstance(vi, FunctionClass):
-                    e = e.subs(vi, p[i])
+                    e = e.subs(vi, pi)
                 else:
-                    undone.append((vi, p[i]))
+                    undone.append((vi, pi))
             if not isinstance(e, Derivative):
                 e = e.doit()
             if isinstance(e, Derivative):
@@ -2516,16 +2515,16 @@ class Subs(Expr):
 
     @cached_property
     def _comparison_key(self):
-        """Retain normalized identity, adding argument order when needed."""
+        """Retain normalized identity, appending ordered arguments when needed."""
         variables = self.variables.args
         point = self.point.args
         normalized = self._xreplace_for_comparison(
             self._expr, self.canonical_variables)
         unused = [(v, p) for v, p in zip(variables, point)
                   if not self.expr.has(v)]
-        key = (normalized,) + tuple(Tuple(*vp) for vp in ordered(unused))
+        key = Tuple(normalized, *(Tuple(*vp) for vp in ordered(unused)))
+        args = ()
 
-        # Tags keep ordered (True) and normalized-only (False) keys distinct.
         # Class targets are not expression instances; retain their bindings.
         if any(isinstance(v, type) for v in variables):
             args = super()._hashable_content()
@@ -2535,19 +2534,18 @@ class Subs(Expr):
                     lambda vp: isinstance(vp[0], FunctionClass), binary=True)
                 variables, point = zip(*(functions + expressions))
                 args = (self.expr, Tuple(*variables), Tuple(*point))
-            return (True,) + key + args
-
-        if len(variables) > 1 and all(isinstance(v, Basic) for v in variables):
+        elif len(variables) > 1:
             # later holds targets to the right; retain order if a point
             # depends on one, or targets are compound or repeated.
             later = set()
             for variable, value in zip(reversed(variables), reversed(point)):
                 if (not variable.is_Symbol or variable in later or
                         value.free_symbols & later):
-                    return (True,) + key + super()._hashable_content()
+                    args = super()._hashable_content()
+                    break
                 later.add(variable)
 
-        return (False,) + key
+        return (key,) + args
 
     def _eval_subs(self, old, new):
         # Subs doit will do the variables in order; the semantics

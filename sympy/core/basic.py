@@ -487,12 +487,9 @@ class Basic(Printable):
 
         # XXX: remove this when issue 5169 is fixed
         def inner_key(arg):
-            if isinstance(arg, Basic):
-                return arg.sort_key(order)
-            elif isinstance(arg, type):
+            if isinstance(arg, (Basic, type)):
                 return default_sort_key(arg, order=order)
-            else:
-                return arg
+            return arg
 
         args = self._sorted_args
         args = len(args), tuple([inner_key(arg) for arg in args])

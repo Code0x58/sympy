@@ -41,7 +41,7 @@ def default_sort_key(item, order=None):
     Here are some examples of the key that is produced:
 
     >>> default_sort_key(UndefinedFunction('f'))
-    ((0, 0, 'UndefinedFunction'), (1, ('f',)), ((1, 0, 'Number'),
+    ((0, 0, 'UndefinedFunction'), (2, ('f', ())), ((1, 0, 'Number'),
         (0, ()), (), 1), 1)
     >>> default_sort_key('1')
     ((0, 0, 'str'), (1, ('1',)), ((1, 0, 'Number'), (0, ()), (), 1), 1)
@@ -130,10 +130,8 @@ def default_sort_key(item, order=None):
     if isinstance(item, type):
         from .function import UndefinedFunction
         if isinstance(item, UndefinedFunction):
-            args = (str(item),)
-            if item._kwargs:
-                args += (tuple((name, _metadata_sort_key(value, order=order))
-                    for name, value in sorted(item._kwargs.items())),)
+            args = (str(item), tuple((name, _metadata_sort_key(value, order=order))
+                for name, value in sorted(item._kwargs.items())))
         else:
             # Distinct class definitions can share a qualified name.
             args = (str(item), item.__module__, item.__qualname__, id(item))
@@ -189,11 +187,10 @@ def _metadata_sort_key(item, order=None):
         item = item.args
     elif isinstance(item, Basic):
         # Include identity fields, such as Symbol assumptions, omitted by sort_key.
-        if item.is_Number:
-            return (1, default_sort_key(item.func, order=order),
-                    item._hashable_content())
-        return (1, default_sort_key(item.func, order=order),
-                _metadata_sort_key(item._hashable_content(), order=order))
+        content = item._hashable_content()
+        if not item.is_Number:
+            content = _metadata_sort_key(content, order=order)
+        return (1, default_sort_key(item.func, order=order), content)
     if isinstance(item, (tuple, frozenset)):
         keys = [_metadata_sort_key(arg, order=order) for arg in item]
         if isinstance(item, frozenset):
