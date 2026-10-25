@@ -38,7 +38,7 @@ import copyreg
 
 from .add import Add
 from .basic import Basic, _atomic
-from .cache import cacheit
+from .cache import cacheit, cached_property
 from .containers import Tuple, Dict
 from .decorators import _sympifyit
 from .evalf import pure_complex
@@ -2333,8 +2333,9 @@ class Subs(Expr):
     >>> s, ss
     (Subs(x, x, 0), Subs(y, y, 0))
 
-    Multiple substitutions with compound variables or points that depend on
-    later variables are compared structurally, preserving their order.
+    For multiple expression targets, the comparison key keeps their order if
+    a target is compound or repeated, or an earlier point contains a later
+    target.
     """
     def __new__(cls, expr, variables, point, **assumptions):
         if not is_sequence(variables, Tuple):
@@ -2369,6 +2370,7 @@ class Subs(Expr):
         # to give a variable-independent expression
         pre = "_"
         pts = sorted(set(point), key=default_sort_key)
+        free = expr.free_symbols
         from sympy.printing.str import StrPrinter
         class CustomStrPrinter(StrPrinter):
             def _print_Dummy(self, expr):
@@ -2386,7 +2388,7 @@ class Subs(Expr):
             # because the new symbol that would be created is _1 but _1
             # is already mapped to 0 so __0 and __1 are used for the new
             # symbols
-            if any(r in expr.free_symbols and
+            if any(r in free and
                    r in variables and
                    Symbol(pre + mystr(point[variables.index(r)])) != r
                    for _, r in reps):
@@ -2394,7 +2396,7 @@ class Subs(Expr):
                 continue
             break
 
-        obj = Expr.__new__(cls, expr, Tuple(*variables), point)
+        obj = Expr.__new__(cls, expr, variables, point)
         obj._expr = expr.xreplace(dict(reps))
         return obj
 
@@ -2501,26 +2503,27 @@ class Subs(Expr):
             return (self.expr.expr_free_symbols - set(self.variables) |
                     set(self.point.expr_free_symbols))
 
-    def __eq__(self, other):
-        if not isinstance(other, Subs):
-            return False
-        return self._hashable_content() == other._hashable_content()
-
-    def __ne__(self, other):
-        return not(self == other)
-
-    def __hash__(self):
-        return super().__hash__()
-
     def _hashable_content(self):
-        if len(self.variables) > 1 and (
-                any(not v.is_Symbol for v in self.variables) or
-                any(p.free_symbols.intersection(self.variables[i + 1:])
-                    for i, p in enumerate(self.point[:-1]))):
-            return self.args
-        return (self._expr.xreplace(self.canonical_variables),
-            ) + tuple(ordered([(v, p) for v, p in
-            zip(self.variables, self.point) if not self.expr.has(v)]))
+        return self._comparison_key
+
+    @cached_property
+    def _comparison_key(self):
+        """Keep ordered and normalized substitution keys distinct."""
+        variables = self.variables.args
+        point = self.point.args
+        # Function-class targets have separate evaluation rules in doit().
+        if len(variables) > 1 and all(isinstance(v, Basic) for v in variables):
+            later = set()
+            for variable, value in zip(reversed(variables), reversed(point)):
+                if (not variable.is_Symbol or variable in later or
+                        value.free_symbols & later):
+                    return (True,) + super()._hashable_content()
+                later.add(variable)
+
+        normalized = self._expr.xreplace(self.canonical_variables)
+        unused = [Tuple(v, p) for v, p in zip(variables, point)
+                  if not self.expr.has(v)]
+        return (False, normalized) + tuple(ordered(unused))
 
     def _eval_subs(self, old, new):
         # Subs doit will do the variables in order; the semantics

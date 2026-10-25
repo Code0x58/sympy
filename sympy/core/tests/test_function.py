@@ -28,7 +28,7 @@ from sympy.series.order import O
 from sympy.tensor.indexed import Indexed
 from sympy.core.function import (PoleError, _mexpand, arity,
         BadSignatureError, BadArgumentsError)
-from sympy.core.parameters import _exp_is_pow
+from sympy.core.parameters import _exp_is_pow, evaluate
 from sympy.core.sympify import sympify, SympifyError
 from sympy.matrices import MutableMatrix, ImmutableMatrix
 from sympy.sets.sets import FiniteSet
@@ -542,24 +542,24 @@ def test_Subs():
         f(y, g(x)), y), y, x)
 
 
-def test_Subs_ordered_identity():
-    n, j, k = symbols('n j k')
-    cases = [
-        (f(j), (j, j + k), (j + k, n - 2), f(n - 2), f(j + k)),
-        (f(x), (x, y), (y, z), f(z), f(y)),
-        (f(x + y), (x, x + y), (0, 1), f(y), f(1)),
-        (f(x), (x, 2*x), (2*x, z), f(z), f(2*x)),
-    ]
-    for expr, variables, points, expected_first, expected_second in cases:
-        first = Subs(expr, variables, points)
-        second = Subs(expr, variables[::-1], points[::-1])
-        assert first != second
-        assert len({first, second}) == 2
-        assert first.doit() == expected_first
-        assert second.doit() == expected_second
-        assert g(first).doit() == g(expected_first)
-        assert g(second).doit() == g(expected_second)
-        assert (first + second).doit() == expected_first + expected_second
+@pytest.mark.parametrize('expr, variables, points, forward, backward', [
+    (f(x), (x, x + y), (x + y, z - 2), f(z - 2), f(x + y)),
+    (f(x), (x, y), (y, z), f(z), f(y)),
+    (f(x + y), (x, x + y), (0, 1), f(y), f(1)),
+    (f(x), (x, 2*x), (2*x, z), f(z), f(2*x)),
+    (f(x**y, x**2), (y, x**2), (2, z), f(z, z), f(x**2, z)),
+    (f(x), (x, y), (Subs(y, y, y), z), f(z), f(y)),
+], ids=['compound_point', 'symbol_point', 'overlapping_targets',
+        'affine_target', 'power_target', 'nested_point'])
+def test_Subs_ordered_identity(expr, variables, points, forward, backward):
+    first = Subs(expr, variables, points)
+    second = Subs(expr, variables[::-1], points[::-1])
+    assert first != second
+    assert first.doit() == forward
+    assert second.doit() == backward
+    assert g(first).doit() == g(forward)
+    assert g(second).doit() == g(backward)
+    assert (first + second).doit() == forward + backward
 
 
 def test_Subs_independent_identity():
@@ -570,6 +570,43 @@ def test_Subs_independent_identity():
     assert hash(first) == hash(second) == hash(renamed)
     assert first.doit() == second.doit() == renamed.doit() == f(0, 1)
     assert Subs(f(x**2), x**2, 0) == Subs(f(y**2), y**2, 0)
+
+
+def test_Subs_repeated_target_identity():
+    first = Subs(Subs(f(x), x, 0), x, 1)
+    second = Subs(f(x), x, 1)
+    assert first != second
+    assert g(first).doit() == g(f(0))
+    assert g(second).doit() == g(f(1))
+
+
+def test_Subs_unused_targets_addition():
+    assert (Subs(1, x, 1) + Subs(1, x, 2)).doit() == 2
+    assert (Subs(1, x, 1) + Subs(1, y, 2)).doit() == 2
+
+
+def test_Subs_evaluation_introduces_target():
+    class F(Function):
+        @classmethod
+        def eval(cls, arg):
+            return x
+
+    first = Subs(F(x, evaluate=False), x, 0)
+    second = Subs(F(y, evaluate=False), y, 0)
+    assert first != second
+    assert g(first).doit() == g(0)
+    assert g(second).doit() == g(x)
+
+
+def test_Subs_comparison_context():
+    source = f(x) + f(y) + exp(x)
+    for context in (evaluate(False), _exp_is_pow(True)):
+        first = Subs(source, (x, y), (1, 1))
+        second = Subs(source, (x, y), (1, 1))
+        with context:
+            first_hash = hash(first)
+        assert first == second
+        assert first_hash == hash(second)
 
 
 def test_doitdoit():
