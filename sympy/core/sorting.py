@@ -131,10 +131,10 @@ def default_sort_key(item, order=None):
         from .function import UndefinedFunction
         if isinstance(item, UndefinedFunction):
             args = (str(item), tuple((name, _metadata_sort_key(value, order=order))
-                for name, value in sorted(item._kwargs.items())))
+                for name, value in item._identity_kwargs))
         else:
             # Distinct class definitions can share a qualified name.
-            args = (str(item), item.__module__, item.__qualname__, id(item))
+            args = (str(item), str(item.__module__), item.__qualname__, id(item))
         return ((0, 0, item.__class__.__name__), (len(args), args),
                 S.One.sort_key(), S.One)
 
@@ -181,8 +181,6 @@ def _metadata_sort_key(item, order=None):
     from .basic import Basic
     from .containers import Tuple
 
-    if isinstance(item, (int, float, complex)):
-        item = sympify(int(item) if isinstance(item, bool) else item)
     if isinstance(item, Tuple):
         item = item.args
     elif isinstance(item, Basic):
@@ -191,12 +189,14 @@ def _metadata_sort_key(item, order=None):
         if not item.is_Number:
             content = _metadata_sort_key(content, order=order)
         return (1, default_sort_key(item.func, order=order), content)
-    if isinstance(item, (tuple, frozenset)):
+    if isinstance(item, (tuple, frozenset)) and type(item).__eq__ in (
+            tuple.__eq__, frozenset.__eq__):
         keys = [_metadata_sort_key(arg, order=order) for arg in item]
         if isinstance(item, frozenset):
             return (3, tuple(sorted(keys)))
         return (2, tuple(keys))
-    return (0, default_sort_key(item, order=order))
+    identity = id(item) if type(item).__eq__ is object.__eq__ else 0
+    return (0, default_sort_key(item, order=order), identity)
 
 
 def _node_count(e):

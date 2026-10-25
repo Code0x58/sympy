@@ -35,6 +35,8 @@ from __future__ import annotations
 from typing import Any
 from collections.abc import Iterable
 import copyreg
+from decimal import Decimal
+from numbers import Number
 
 from .add import Add
 from .basic import Basic, _atomic
@@ -418,6 +420,11 @@ class Application(Basic, metaclass=FunctionClass):
             return new(*[i._subs(old, new) for i in self.args])
 
 
+def _function_cache_key(args, kwargs):
+    if (args[0] if args else kwargs.get('cls')) is Function:
+        return _function_metadata_key(kwargs)
+
+
 class Function(Application, Expr):
     r"""
     Base class for applied mathematical functions.
@@ -480,7 +487,7 @@ class Function(Application, Expr):
     def _diff_wrt(self):
         return False
 
-    @cacheit
+    @cacheit(kwargs_key=_function_cache_key)
     def __new__(cls, *args, **options) -> type[AppliedUndef]:  # type: ignore
         # Handle calls like Function('f')
         if cls is Function:
@@ -930,6 +937,32 @@ class UndefSageHelper:
 _undef_sage_helper = UndefSageHelper()
 
 
+def _canonical_function_metadata(value):
+    """Normalize numeric metadata without changing reconstruction arguments."""
+    if isinstance(value, Basic):
+        return value
+    if isinstance(value, Number):
+        if isinstance(value, Decimal) and value.is_finite():
+            return Rational(*value.as_integer_ratio())
+        return sympify(value)
+    if isinstance(value, tuple) and type(value).__eq__ is tuple.__eq__:
+        return tuple(map(_canonical_function_metadata, value))
+    if isinstance(value, frozenset) and type(value).__eq__ is frozenset.__eq__:
+        return frozenset(map(_canonical_function_metadata, value))
+    return value
+
+
+def _function_metadata_key(kwargs):
+    if not kwargs:
+        return ()
+    if (not global_parameters.evaluate or not global_parameters.distribute
+            or global_parameters.exp_is_pow):
+        with evaluate(True), distribute(True), _exp_is_pow(False):
+            return _function_metadata_key(kwargs)
+    return tuple((key, _canonical_function_metadata(value))
+        for key, value in sorted(kwargs.items()))
+
+
 class UndefinedFunction(FunctionClass):
     """
     The (meta)class of undefined functions.
@@ -961,8 +994,9 @@ class UndefinedFunction(FunctionClass):
         __dict__.update(kwargs)
         # add back the sanitized assumptions without the is_ prefix
         kwargs.update(assumptions)
-        # Save these for __eq__
-        __dict__.update({'_kwargs': kwargs})
+        # Keep the original keyword values for reconstruction.
+        __dict__['_kwargs'] = kwargs
+        __dict__['_identity_kwargs'] = _function_metadata_key(kwargs)
         # do this for pickling
         __dict__['__module__'] = None
         obj = super().__new__(mcl, name, bases, __dict__)  # type: ignore
@@ -973,15 +1007,16 @@ class UndefinedFunction(FunctionClass):
     def __instancecheck__(cls, instance):
         return cls in type(instance).__mro__
 
-    _kwargs: dict[str, bool | None] = {}
+    _kwargs: dict[str, Any] = {}
+    _identity_kwargs: tuple[tuple[str, Any], ...] = ()
 
     def __hash__(self):
-        return hash((self.class_key(), frozenset(self._kwargs.items())))
+        return hash((self.class_key(), self._identity_kwargs))
 
     def __eq__(self, other):
         return (isinstance(other, self.__class__) and
             self.class_key() == other.class_key() and
-            self._kwargs == other._kwargs)
+            self._identity_kwargs == other._identity_kwargs)
 
     def __ne__(self, other):
         return not self == other

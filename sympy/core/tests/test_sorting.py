@@ -1,4 +1,6 @@
 from __future__ import annotations
+from fractions import Fraction
+from functools import partial
 from sympy.core.containers import Tuple
 from sympy.core.cache import clear_cache
 from sympy.core.function import Function
@@ -30,6 +32,7 @@ def test_class_sort_keys():
         (Function('a', value=Symbol('s', positive=True)),
          Function('a', value=Symbol('s', negative=True))),
         (Function('a', value=Float(1, 10)), Function('a', value=Float(1, 20))),
+        (Function('a', _imp_=partial(pow, 2)), Function('a', _imp_=partial(pow, 2))),
         (type('a', (Function,), {}), type('a', (Function,), {})),
     ]:
         first_key, second_key = default_sort_key(first), default_sort_key(second)
@@ -44,6 +47,21 @@ def test_class_sort_keys():
     second = Function('a', nargs=1, value=Symbol('s', positive=True))
     assert first == second
     assert first_key == default_sort_key(second)
+
+
+def test_equal_numeric_metadata_sort_keys():
+    first = Function('a', value=2)
+    second = Function('a', value=Fraction(2))
+    assert first == second
+    assert default_sort_key(first) == default_sort_key(second)
+
+
+def test_class_sort_keys_with_none_module():
+    first = type('F', (Function,), {'__module__': None})
+    second = type('F', (Function,), {'__module__': 'example'})
+    assert len(sorted([first, second], key=default_sort_key)) == 2
+    assert sorted([Tuple(first), Tuple(second)], key=default_sort_key) == \
+        sorted([Tuple(second), Tuple(first)], key=default_sort_key)
 
 
 def test_ordered():

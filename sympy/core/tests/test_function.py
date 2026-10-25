@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import pytest
+from decimal import Decimal
+from fractions import Fraction
+from functools import partial
+from pickle import dumps, loads
 
 from sympy.concrete.summations import Sum
 from sympy.core.basic import Basic, _aresame
@@ -650,6 +654,90 @@ def test_Subs_recreated_function_class_identity():
     assert first_hash == hash(second)
 
 
+@pytest.mark.parametrize('value, equivalent', [
+    (2, Fraction(2)),
+    (Fraction(1, 10), Rational(1, 10)),
+    (Decimal('0.1'), Rational(1, 10)),
+    ((Fraction(2),), (S(2),)),
+    (frozenset([Fraction(2)]), frozenset([S(2)])),
+    (True, S.true),
+])
+def test_function_numeric_metadata_ordering(value, equivalent):
+    first = Function('a', value=value)
+    second = Function('a', value=equivalent)
+    other = Function('a', value=1)
+    assert first == second
+    assert hash(first) == hash(second)
+    left = first(x) + other(x)
+    clear_cache()
+    right = second(x) + other(x)
+    assert left == right
+
+
+def test_function_numeric_metadata_reconstruction():
+    value = Decimal('0.1')
+    first = Function('a', value=value)
+    assert first.value is value
+    clear_cache()
+    second = loads(dumps(first))
+    assert first == second
+    assert hash(first) == hash(second)
+    assert type(second.value) is Decimal
+    assert second.value == value
+    assert first != Function('a', value=0.1)
+
+
+def test_function_numeric_metadata_context():
+    first = Function('a', value=2 + 3j)
+    first_hash = hash(first)
+    for context in (evaluate(False), distribute(False), _exp_is_pow(True)):
+        with context:
+            clear_cache()
+            second = Function('a', value=2 + 3j)
+            assert first == second
+            assert first_hash == hash(second)
+
+
+@pytest.mark.parametrize('first_value, second_value', [
+    ((True,), (1,)),
+    ((1.0,), (1,)),
+    (frozenset([True]), frozenset([1])),
+])
+def test_function_numeric_metadata_cache(first_value, second_value):
+    clear_cache()
+    first = Function('a', value=first_value)
+    second = Function('a', value=second_value)
+    clear_cache()
+    rebuilt = Function('a', value=second_value)
+    assert second == rebuilt
+    assert hash(second) == hash(rebuilt)
+    assert first != second
+
+
+def test_function_shared_callable_metadata():
+    implementation = partial(pow, 2)
+    first = Function('a', _imp_=implementation)
+    first_hash = hash(first)
+    clear_cache()
+    second = Function('a', _imp_=implementation)
+    assert first == second
+    assert first_hash == hash(second)
+    assert first(x).compare(second(x)) == 0
+
+
+@pytest.mark.parametrize('base', [tuple, frozenset])
+def test_function_identity_metadata_containers(base):
+    container = type('IdentityContainer', (base,), {
+        '__eq__': object.__eq__, '__hash__': object.__hash__})
+    first = Function('a', value=container([2]))
+    second = Function('a', value=container([2]))
+    assert first != second
+    assert first(x) + second(x) == second(x) + first(x)
+    left = Subs(f(x), f, first)
+    right = Subs(f(x), f, second)
+    assert left + right == right + left
+
+
 @pytest.mark.parametrize('first_function, second_function', [
     (sin, cos),
     (Function('a'), Function('b')),
@@ -658,6 +746,7 @@ def test_Subs_recreated_function_class_identity():
     (Function('a', value=Symbol('s', positive=True)),
      Function('a', value=Symbol('s', negative=True))),
     (Function('a', value=Float(1, 10)), Function('a', value=Float(1, 20))),
+    (Function('a', _imp_=partial(pow, 2)), Function('a', _imp_=partial(pow, 2))),
 ])
 def test_Subs_function_replacement_ordering(first_function, second_function):
     first = Subs(f(x), f, first_function)

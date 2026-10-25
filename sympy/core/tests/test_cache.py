@@ -1,6 +1,7 @@
 from __future__ import annotations
 import sys
-from sympy.core.cache import cacheit, cached_property, lazy_function
+from sympy.core.cache import (cacheit, cached_property, lazy_function,
+    __cacheit, __cacheit_debug, __cacheit_nocache)
 from sympy.testing.pytest import raises
 
 def test_cacheit_doc():
@@ -23,6 +24,19 @@ def test_cacheit_unhashable():
     assert testit(a) == {}
     a[1] = 2
     assert testit(a) == {1: 2}
+
+
+def test_cacheit_keyword_key():
+    def key(args, kwargs):
+        return type(kwargs['value'][0])
+
+    for decorator in (cacheit, __cacheit(10), __cacheit_debug(10), __cacheit_nocache):
+        @decorator(kwargs_key=key)
+        def testit(*, value):
+            return type(value[0])
+
+        assert testit(value=(True,)) is bool
+        assert testit(value=(1,)) is int
 
 def test_cachit_exception():
     # Make sure the cache doesn't call functions multiple times when they
