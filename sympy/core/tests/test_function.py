@@ -601,6 +601,26 @@ def test_Subs_function_target_identity():
     assert first.doit() == second.doit() == 1
 
 
+@pytest.mark.xfail(strict=True, reason='Subs identity loses function replacements')
+@pytest.mark.parametrize('expr, variables, points, other_variables, other_points, forward, backward', [
+    (f(x), (f,), (sin,), (f,), (cos,), sin(x), cos(x)),
+    (f(x), (g, x, y), (sin, y, z), (g, y, x), (sin, z, y), f(z), f(y)),
+    (f(x), (f, g), (g, sin), (g, f), (sin, g), sin(x), g(x)),
+    (Derivative(f(x), x), (f, x), (sin, 0), (f, x), (cos, 0), S.One, S.Zero),
+], ids=['single_function', 'mixed_targets', 'function_chain', 'derivative'])
+def test_Subs_function_replacement_identity(expr, variables, points,
+        other_variables, other_points, forward, backward):
+    first = Subs(expr, variables, points)
+    second = Subs(expr, other_variables, other_points)
+    assert first != second
+    assert len({first, second}) == 2
+    assert first.doit() == forward
+    assert second.doit() == backward
+    assert h(first).doit() == h(forward)
+    assert h(second).doit() == h(backward)
+    assert (first + second).doit() == forward + backward
+
+
 def test_Subs_unused_targets_addition():
     assert (Subs(1, x, 1) + Subs(1, x, 2)).doit() == 2
     assert (Subs(1, x, 1) + Subs(1, y, 2)).doit() == 2
