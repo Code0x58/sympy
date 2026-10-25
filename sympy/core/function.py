@@ -36,7 +36,6 @@ from typing import Any
 from collections.abc import Iterable
 import copyreg
 from decimal import Decimal
-from functools import wraps
 from numbers import Number
 
 from .add import Add
@@ -421,19 +420,12 @@ class Application(Basic, metaclass=FunctionClass):
             return new(*[i._subs(old, new) for i in self.args])
 
 
-def _cacheit_function(func):
-    """Include normalized metadata in the undefined-function cache key."""
-    @cacheit
-    @wraps(func)
-    def cached(key, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    @wraps(cached)
-    def wrapper(cls, *args, **kwargs):
-        key = _function_metadata_key(kwargs) if cls is Function else None
-        return cached(key, cls, *args, **kwargs)
-
-    return wrapper
+@cacheit
+def _new_function(metadata_key, cls, /, *args, **options):
+    """Cache construction using original arguments and normalized metadata."""
+    if cls is Function:
+        return UndefinedFunction(*args, **options)
+    return cls._new_(*args, **options)
 
 
 class Function(Application, Expr):
@@ -498,13 +490,9 @@ class Function(Application, Expr):
     def _diff_wrt(self):
         return False
 
-    @_cacheit_function
     def __new__(cls, *args, **options) -> type[AppliedUndef]:  # type: ignore
-        # Handle calls like Function('f')
-        if cls is Function:
-            return UndefinedFunction(*args, **options)  # type: ignore
-        else:
-            return cls._new_(*args, **options)  # type: ignore
+        key = _function_metadata_key(options) if cls is Function else None
+        return _new_function(key, cls, *args, **options)
 
     @classmethod
     def _new_(cls, *args, **options) -> Expr:
@@ -952,9 +940,14 @@ def _canonical_function_metadata(value):
     """Canonicalize metadata, retaining the SymPy type of each container."""
     if isinstance(value, Basic):
         if isinstance(value, Tuple):
-            return (value.func, tuple(map(_canonical_function_metadata, value.args)))
+            if type(value) is not Tuple:
+                return (type(value), value)
+            return (Tuple, tuple(map(_canonical_function_metadata, value.args)))
         if getattr(value, 'is_FiniteSet', False):
-            return (value.func, frozenset(map(_canonical_function_metadata, value.args)))
+            from sympy.sets.sets import FiniteSet
+            if type(value) is not FiniteSet and value is not S.EmptySet:
+                return (type(value), value)
+            return (type(value), frozenset(map(_canonical_function_metadata, value.args)))
         return value
     if isinstance(value, Number):
         if isinstance(value, Decimal) and value.is_finite():

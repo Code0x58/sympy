@@ -424,7 +424,7 @@ class Basic(Printable):
         for l, r in zip(st, ot):
             if isinstance(l, Basic):
                 c = l.compare(r)
-            elif isinstance(l, type):
+            elif isinstance(l, type) or isinstance(r, type):
                 if l == r:
                     c = 0
                 elif isinstance(r, Basic):

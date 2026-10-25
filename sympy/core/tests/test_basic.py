@@ -70,12 +70,19 @@ def test_compare_function_classes():
         (Function('a', positive=True), Function('a', negative=True)),
     ]:
         assert first != second
-        assert Tuple(first).compare(Tuple(second)) != 0
-        assert Tuple(first).compare(Tuple(second)) == -Tuple(second).compare(Tuple(first))
+        assert Tuple(first).compare(Tuple(second)) == -Tuple(second).compare(Tuple(first)) != 0
     first = Function('a', positive=True)(x)
     second = Function('a', negative=True)(x)
     assert first.compare(second) == -second.compare(first) != 0
     assert first + second == second + first
+
+
+def test_compare_class_and_native_arguments():
+    for cls in (Function('f'), Symbol, int):
+        first = Basic(cls)
+        for value in (None, 1, 1.0, False, 'f', (1,), frozenset([1])):
+            second = Basic(value)
+            assert first.compare(second) == -second.compare(first) != 0
 
 
 def test_equality():

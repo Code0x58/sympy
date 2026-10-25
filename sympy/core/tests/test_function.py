@@ -729,12 +729,25 @@ def test_function_shared_callable_metadata():
     assert first(x).compare(second(x)) == 0
 
 
-@pytest.mark.parametrize('base', [tuple, frozenset])
-def test_function_identity_metadata_containers(base):
+@pytest.mark.parametrize('name', ['key', 'metadata_key'])
+def test_function_metadata_keyword_names(name):
+    first = Function('a', **{name: 1})
+    assert getattr(first, name) == 1
+    assert first != Function('a', **{name: 2})
+    clear_cache()
+    rebuilt = Function('a', **{name: 1})
+    assert first == rebuilt
+    assert hash(first) == hash(rebuilt)
+
+
+@pytest.mark.parametrize('base, args', [
+    (tuple, ([2],)), (frozenset, ([2],)), (Tuple, (2,)), (FiniteSet, (2,)),
+])
+def test_function_identity_metadata_containers(base, args):
     container = type('IdentityContainer', (base,), {
         '__eq__': object.__eq__, '__hash__': object.__hash__})
-    first = Function('a', value=container([2]))
-    second = Function('a', value=container([2]))
+    first = Function('a', value=container(*args))
+    second = Function('a', value=container(*args))
     assert first != second
     assert first(x) + second(x) == second(x) + first(x)
     left = Subs(f(x), f, first)
@@ -751,6 +764,30 @@ def test_function_metadata_container_subclasses(base):
     second = Function('a', value=Container(x))
     assert first != second
     assert first(x) + second(x) == second(x) + first(x)
+
+
+@pytest.mark.parametrize('base', [Tuple, FiniteSet])
+def test_function_metadata_container_identity_fields(base):
+    class Container(base):
+        __eq__ = Basic.__eq__
+        __hash__ = Basic.__hash__
+
+        def _hashable_content(self):
+            return self.args + (self.tag,)
+
+    left, right = Container(x), Container(x)
+    left.tag, right.tag = 1, 2
+    first = Function('a', value=left)
+    second = Function('a', value=right)
+    assert first != second
+    assert first(x) + second(x) == second(x) + first(x)
+    clear_cache()
+    equivalent = Container(x)
+    equivalent.tag = 1
+    rebuilt = Function('a', value=equivalent)
+    assert first == rebuilt
+    assert hash(first) == hash(rebuilt)
+    assert first(x) + second(x) == rebuilt(x) + second(x)
 
 
 @pytest.mark.parametrize('first_function, second_function', [

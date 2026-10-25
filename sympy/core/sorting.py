@@ -135,10 +135,8 @@ def default_sort_key(item, order=None):
         else:
             # Distinct class definitions can share a qualified name.
             args = (str(item), str(item.__module__), item.__qualname__, id(item))
-        return ((0, 0, item.__class__.__name__), (len(args), args),
-                S.One.sort_key(), S.One)
-
-    if iterable(item, exclude=str):
+        cls_index, args = 0, (len(args), args)
+    elif iterable(item, exclude=str):
         if isinstance(item, dict):
             args = item.items()
             unordered = True
@@ -180,12 +178,12 @@ def default_sort_key(item, order=None):
 def _metadata_sort_key(item, order=None):
     from .basic import Basic
 
-    if isinstance(item, Basic):
+    if isinstance(item, Basic) and type(item).__eq__ is not object.__eq__:
         # Include identity fields, such as Symbol assumptions, omitted by sort_key.
         content = item._hashable_content()
         if not item.is_Number:
             content = _metadata_sort_key(content, order=order)
-        return (1, default_sort_key(item.func, order=order), content)
+        return (1, default_sort_key(type(item), order=order), content)
     if isinstance(item, (tuple, frozenset)) and type(item).__eq__ in (
             tuple.__eq__, frozenset.__eq__):
         keys = [_metadata_sort_key(arg, order=order) for arg in item]
