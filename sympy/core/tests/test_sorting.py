@@ -1,6 +1,9 @@
 from __future__ import annotations
+import pytest
+from decimal import Decimal
 from fractions import Fraction
 from functools import partial
+from sympy.core.basic import Basic
 from sympy.core.containers import Tuple
 from sympy.core.cache import clear_cache
 from sympy.core.function import Function
@@ -54,6 +57,43 @@ def test_equal_numeric_metadata_sort_keys():
     second = Function('a', value=Fraction(2))
     assert first == second
     assert default_sort_key(first) == default_sort_key(second)
+
+
+@pytest.mark.parametrize('value, equivalent', [
+    (1, 1.0), (True, 1), (Fraction(1, 10), Decimal('0.1')), (1, 1 + 0j),
+])
+def test_equal_metadata_numeric_fields(value, equivalent):
+    first = Function('a', value=Basic(value, 'left'))
+    clear_cache()
+    second = Function('a', value=Basic(equivalent, 'left'))
+    other = Function('a', value=Basic(equivalent, 'right'))
+    assert first == second
+    assert hash(first) == hash(second)
+    assert default_sort_key(first) == default_sort_key(second)
+    assert first(x) + other(x) == other(x) + first(x)
+    assert first(x) + other(x) == second(x) + other(x)
+
+
+def test_equal_metadata_string_fields():
+    for base, constructor, value in ((str, Symbol, 's'), (bytes, Basic, b's')):
+        class Subclass(base):
+            __slots__ = ()
+
+        first = Function('a', value=constructor(Subclass(value)))
+        clear_cache()
+        second = Function('a', value=constructor(value))
+        assert first == second
+        assert hash(first) == hash(second)
+        assert default_sort_key(first) == default_sort_key(second)
+
+
+@pytest.mark.parametrize('constructor', [float, complex, Decimal])
+def test_metadata_nan_fields(constructor):
+    first = Function('a', value=Basic(constructor('nan')))
+    second = Function('a', value=Basic(constructor('nan')))
+    assert first != second
+    assert default_sort_key(first) != default_sort_key(second)
+    assert first(x) + second(x) == second(x) + first(x)
 
 
 def test_class_sort_keys_with_none_module():

@@ -425,10 +425,13 @@ class Basic(Printable):
             if isinstance(l, Basic):
                 c = l.compare(r)
             elif isinstance(l, type) or isinstance(r, type):
-                if l == r:
+                # Class-valued fields follow other fields consistently.
+                if not isinstance(l, type):
+                    c = -1
+                elif not isinstance(r, type):
+                    c = 1
+                elif l == r:
                     c = 0
-                elif isinstance(r, Basic):
-                    c = -r.compare(l)
                 else:
                     lk, rk = default_sort_key(l), default_sort_key(r)
                     c = bool(lk > rk) - bool(lk < rk)

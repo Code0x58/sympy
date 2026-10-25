@@ -1,5 +1,7 @@
 from __future__ import annotations
 from collections import defaultdict
+from decimal import Decimal
+from numbers import Complex
 
 from .sympify import sympify, SympifyError
 from sympy.utilities.iterables import iterable, uniq
@@ -178,20 +180,27 @@ def default_sort_key(item, order=None):
 def _metadata_sort_key(item, order=None):
     from .basic import Basic
 
-    if isinstance(item, Basic) and type(item).__eq__ is not object.__eq__:
+    if type(item).__eq__ is object.__eq__:
+        return (0, default_sort_key(item, order=order), id(item))
+    if isinstance(item, Basic):
         # Include identity fields, such as Symbol assumptions, omitted by sort_key.
-        content = item._hashable_content()
-        if not item.is_Number:
-            content = _metadata_sort_key(content, order=order)
-        return (1, default_sort_key(type(item), order=order), content)
+        return (1, default_sort_key(type(item), order=order),
+                _metadata_sort_key(item._hashable_content(), order=order))
     if isinstance(item, (tuple, frozenset)) and type(item).__eq__ in (
             tuple.__eq__, frozenset.__eq__):
         keys = [_metadata_sort_key(arg, order=order) for arg in item]
         if isinstance(item, frozenset):
             return (3, tuple(sorted(keys)))
         return (2, tuple(keys))
-    identity = id(item) if type(item).__eq__ is object.__eq__ else 0
-    return (0, default_sort_key(item, order=order), identity)
+    if isinstance(item, (Complex, Decimal)):
+        # Numeric fields use Python equality; NaNs need object identity.
+        if item != item:
+            return (4, 1, id(item))
+        return (4, 0, item.real, item.imag)
+    if isinstance(item, (str, bytes)) and type(item).__eq__ in (
+            str.__eq__, bytes.__eq__):
+        item = str.__str__(item) if isinstance(item, str) else bytes.__bytes__(item)
+    return (0, default_sort_key(item, order=order), 0)
 
 
 def _node_count(e):

@@ -85,6 +85,15 @@ def test_compare_class_and_native_arguments():
             assert first.compare(second) == -second.compare(first) != 0
 
 
+def test_compare_class_and_native_transitivity():
+    first = Basic(frozenset([S.One]))
+    second = Basic('f')
+    third = Basic(int)
+    assert first.compare(second) < 0
+    assert second.compare(third) < 0
+    assert first.compare(third) < 0
+
+
 def test_equality():
     instances = [b1, b2, b3, b21, Basic(b1, b1, b1), Basic]
     for i, b_i in enumerate(instances):

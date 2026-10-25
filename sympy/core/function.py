@@ -959,7 +959,7 @@ def _canonical_function_metadata(value):
         from sympy.sets.sets import FiniteSet
         cls = FiniteSet if value else S.EmptySet.func
         return (cls, frozenset(map(_canonical_function_metadata, value)))
-    return value
+    return (type(value), value)
 
 
 def _function_metadata_key(kwargs):

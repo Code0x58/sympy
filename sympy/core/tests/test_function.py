@@ -790,6 +790,54 @@ def test_function_metadata_container_identity_fields(base):
     assert first(x) + second(x) == rebuilt(x) + second(x)
 
 
+def test_function_metadata_container_key_collision():
+    class IdentityTuple(tuple):
+        __slots__ = ()
+        __eq__ = object.__eq__
+        __hash__ = object.__hash__
+
+    class TupleValue:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            if isinstance(other, TupleValue):
+                other = other.value
+            return self.value == other
+
+        def __hash__(self):
+            return hash(self.value)
+
+        def __repr__(self):
+            return repr(self.value)
+
+    first = Function('a', value=(1,))
+    for cls in (IdentityTuple, TupleValue):
+        second = Function('a', value=cls((Tuple, (S.One,))))
+        assert first != second
+        assert len({first, second}) == 2
+        assert first(x) + second(x) == second(x) + first(x)
+
+
+def test_function_numeric_subclass_metadata():
+    class TaggedRational(Rational):
+        __eq__ = Basic.__eq__
+        __hash__ = Basic.__hash__
+
+        def _hashable_content(self):
+            return super()._hashable_content() + (self.tag,)
+
+    left = TaggedRational(3, 5)
+    left.tag = Symbol('left')
+    clear_cache()
+    right = TaggedRational(3, 5)
+    right.tag = Symbol('right')
+    first = Function('a', value=left)
+    second = Function('a', value=right)
+    assert first != second
+    assert first(x) + second(x) == second(x) + first(x)
+
+
 @pytest.mark.parametrize('first_function, second_function', [
     (sin, cos),
     (Function('a'), Function('b')),
