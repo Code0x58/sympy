@@ -549,8 +549,9 @@ def test_Subs():
     (f(x), (x, 2*x), (2*x, z), f(z), f(2*x)),
     (f(x**y, x**2), (y, x**2), (2, z), f(z, z), f(x**2, z)),
     (f(x), (x, y), (Subs(y, y, y), z), f(z), f(y)),
+    (f(x), (x, y, z), (y, z, t), f(t), f(y)),
 ], ids=['compound_point', 'symbol_point', 'overlapping_targets',
-        'affine_target', 'power_target', 'nested_point'])
+        'affine_target', 'power_target', 'nested_point', 'three_targets'])
 def test_Subs_ordered_identity(expr, variables, points, forward, backward):
     first = Subs(expr, variables, points)
     second = Subs(expr, variables[::-1], points[::-1])
@@ -578,6 +579,26 @@ def test_Subs_repeated_target_identity():
     assert first != second
     assert g(first).doit() == g(f(0))
     assert g(second).doit() == g(f(1))
+
+
+def test_Subs_ordered_identity_with_nested_points():
+    positive = Symbol('a', positive=True)
+    negative = Symbol('a', negative=True)
+    first_point = Subs(t, t, positive)
+    second_point = Subs(z, z, negative)
+    assert first_point.doit() != second_point.doit()
+    first = Subs(f(x), (x, x + y), (first_point, 0))
+    second = Subs(f(x), (x, x + y), (second_point, 0))
+    assert first != second
+
+
+def test_Subs_function_target_identity():
+    source = Derivative(f(x), x)
+    first = Subs(source, (f, x), (sin, 0))
+    second = Subs(source, (x, f), (0, sin))
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first.doit() == second.doit() == 1
 
 
 def test_Subs_unused_targets_addition():

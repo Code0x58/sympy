@@ -2508,22 +2508,27 @@ class Subs(Expr):
 
     @cached_property
     def _comparison_key(self):
-        """Keep ordered and normalized substitution keys distinct."""
+        """Retain normalized identity, adding argument order when needed."""
         variables = self.variables.args
         point = self.point.args
+        normalized = self._expr.xreplace(self.canonical_variables)
+        unused = [(v, p) for v, p in zip(variables, point)
+                  if not self.expr.has(v)]
+        key = (normalized,) + tuple(Tuple(*vp) for vp in ordered(unused))
+
+        # Tags keep ordered (True) and normalized-only (False) keys distinct.
         # Function-class targets have separate evaluation rules in doit().
         if len(variables) > 1 and all(isinstance(v, Basic) for v in variables):
+            # later holds targets to the right; retain order if a point
+            # depends on one, or targets are compound or repeated.
             later = set()
             for variable, value in zip(reversed(variables), reversed(point)):
                 if (not variable.is_Symbol or variable in later or
                         value.free_symbols & later):
-                    return (True,) + super()._hashable_content()
+                    return (True,) + key + super()._hashable_content()
                 later.add(variable)
 
-        normalized = self._expr.xreplace(self.canonical_variables)
-        unused = [Tuple(v, p) for v, p in zip(variables, point)
-                  if not self.expr.has(v)]
-        return (False, normalized) + tuple(ordered(unused))
+        return (False,) + key
 
     def _eval_subs(self, old, new):
         # Subs doit will do the variables in order; the semantics
