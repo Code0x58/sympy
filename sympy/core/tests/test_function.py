@@ -9,7 +9,7 @@ from sympy.core.containers import Dict, Tuple
 from sympy.core.expr import Expr, unchanged
 from sympy.core.function import (Subs, Function, diff, Lambda, expand,
     nfloat, Derivative)
-from sympy.core.numbers import E, Float, zoo, Rational, pi, I, oo, nan
+from sympy.core.numbers import E, Float, Integer, zoo, Rational, pi, I, oo, nan
 from sympy.core.power import Pow
 from sympy.core.relational import Eq
 from sympy.core.singleton import S
@@ -620,9 +620,12 @@ def test_Subs_function_target_identity(variables, points,
      Function('a', positive=True)(x), Function('a', negative=True)(x)),
     (f(x), (f,), (Function('a', nargs=1),), (f,),
      (Function('a', nargs=2),), Function('a', nargs=1)(x), f(x)),
+    (f(x), (Integer, x, y), (1, y, z), (Integer, y, x), (1, z, y), f(z), f(y)),
+    (f(x), (Symbol, x, y), (1, y, z), (Symbol, y, x), (1, z, y), f(z), f(y)),
 ], ids=['single_function', 'mixed_targets', 'function_chain', 'derivative',
-        'derivative_chain', 'lambda', 'assumptions', 'arity'])
-def test_Subs_function_replacement_identity(expr, variables, points,
+        'derivative_chain', 'lambda', 'assumptions', 'arity',
+        'integer_class', 'symbol_class'])
+def test_Subs_class_replacement_identity(expr, variables, points,
         other_variables, other_points, forward, backward):
     first = Subs(expr, variables, points)
     second = Subs(expr, other_variables, other_points)

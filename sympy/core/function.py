@@ -2527,7 +2527,8 @@ class Subs(Expr):
                 args = (self.expr, Tuple(*variables), Tuple(*point))
             return (True,) + key + args
 
-        if len(variables) > 1 and all(isinstance(v, Basic) for v in variables):
+        if (len(variables) > 1 and
+                all(isinstance(v, (Basic, type)) for v in variables)):
             # later holds targets to the right; retain order if a point
             # depends on one, or targets are compound or repeated.
             later = set()
