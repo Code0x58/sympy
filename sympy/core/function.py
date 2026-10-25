@@ -2335,7 +2335,8 @@ class Subs(Expr):
 
     For multiple expression targets, the comparison key keeps their order if
     a target is compound or repeated, or an earlier point contains a later
-    target.
+    target. Function targets retain their bindings too; for derivatives,
+    function replacements precede expression replacements.
     """
     def __new__(cls, expr, variables, point, **assumptions):
         if not is_sequence(variables, Tuple):
@@ -2407,12 +2408,10 @@ class Subs(Expr):
         e, v, p = self.args
 
         # remove self mappings
-        for i, (vi, pi) in enumerate(zip(v, p)):
-            if vi == pi:
-                v = v[:i] + v[i + 1:]
-                p = p[:i] + p[i + 1:]
-        if not v:
+        replacements = [(vi, pi) for vi, pi in zip(v, p) if vi != pi]
+        if not replacements:
             return self.expr
+        v, p = zip(*replacements)
 
         if isinstance(e, Derivative):
             # apply functions first, e.g. f -> cos
@@ -2425,14 +2424,14 @@ class Subs(Expr):
             if not isinstance(e, Derivative):
                 e = e.doit()
             if isinstance(e, Derivative):
-                # do Subs that aren't related to differentiation
+                # Apply substitutions that do not affect differentiation first.
                 undone2 = []
                 D = Dummy()
                 arg = e.args[0]
                 for vi, pi in undone:
-                    if D not in e.xreplace({vi: D}).free_symbols:
-                        if arg.has(vi):
-                            e = e.subs(vi, pi)
+                    if (D not in e.xreplace({vi: D}).free_symbols and
+                            arg.has(vi)):
+                        e = e.subs(vi, pi)
                     else:
                         undone2.append((vi, pi))
                 undone = undone2
@@ -2457,7 +2456,7 @@ class Subs(Expr):
                 # inject remaining subs
                 rv = e.subs(undone)
         else:
-            rv = e.doit(**hints).subs(list(zip(v, p)))
+            rv = e.doit(**hints).subs(replacements)
 
         if hints.get('deep', True) and rv != self:
             rv = rv.doit(**hints)
@@ -2517,7 +2516,17 @@ class Subs(Expr):
         key = (normalized,) + tuple(Tuple(*vp) for vp in ordered(unused))
 
         # Tags keep ordered (True) and normalized-only (False) keys distinct.
-        # Function-class targets have separate evaluation rules in doit().
+        # xreplace does not replace function heads, so retain their bindings.
+        if any(isinstance(v, FunctionClass) for v in variables):
+            args = super()._hashable_content()
+            if isinstance(self.expr, Derivative):
+                # Subs.doit applies function replacements first for derivatives.
+                functions, expressions = sift(zip(variables, point),
+                    lambda vp: isinstance(vp[0], FunctionClass), binary=True)
+                variables, point = zip(*(functions + expressions))
+                args = (self.expr, Tuple(*variables), Tuple(*point))
+            return (True,) + key + args
+
         if len(variables) > 1 and all(isinstance(v, Basic) for v in variables):
             # later holds targets to the right; retain order if a point
             # depends on one, or targets are compound or repeated.

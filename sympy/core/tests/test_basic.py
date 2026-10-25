@@ -51,6 +51,21 @@ def test_immutable():
         b1.x = 1
 
 
+def test_compare_function_classes():
+    f, g = Function('f'), Function('g')
+    assert Tuple(f).compare(Tuple(g)) == -1
+    assert Tuple(g).compare(Tuple(f)) == 1
+    assert Tuple(sin).compare(Tuple(cos)) == 1
+    assert Tuple(cos).compare(Tuple(sin)) == -1
+    assert Tuple(f).compare(Tuple(f)) == 0
+    x = Symbol('x')
+    assert Tuple(f).compare(Tuple(x)) == -Tuple(x).compare(Tuple(f)) != 0
+    named_like_metaclass = Function('UndefinedFunction')(x)
+    assert named_like_metaclass.compare(f) == -1
+    assert Tuple(f).compare(Tuple(named_like_metaclass)) == 1
+    assert Tuple(named_like_metaclass).compare(Tuple(f)) == -1
+
+
 def test_equality():
     instances = [b1, b2, b3, b21, Basic(b1, b1, b1), Basic]
     for i, b_i in enumerate(instances):

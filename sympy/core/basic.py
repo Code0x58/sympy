@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, overload
 from .assumptions import _prepare_class_assumptions
 from .cache import cacheit
 from .sympify import _sympify, sympify, SympifyError, _external_converter
-from .sorting import ordered
+from .sorting import default_sort_key, ordered
 from .kind import Kind, UndefinedKind
 from ._print_helpers import Printable
 
@@ -401,6 +401,8 @@ class Basic(Printable):
         # following lines:
         if self is other:
             return 0
+        if not isinstance(other, Basic):
+            return -1
         n1 = self.__class__
         n2 = other.__class__
         c = _cmp_name(n1, n2)
@@ -417,6 +419,12 @@ class Basic(Printable):
         for l, r in zip(st, ot):
             if isinstance(l, Basic):
                 c = l.compare(r)
+            elif isinstance(l, type):
+                if isinstance(r, Basic):
+                    c = -r.compare(l)
+                else:
+                    lk, rk = default_sort_key(l), default_sort_key(r)
+                    c = (lk > rk) - (lk < rk)
             elif isinstance(l, frozenset):
                 l = Basic(*l) if isinstance(l, frozenset) else l
                 r = Basic(*r) if isinstance(r, frozenset) else r

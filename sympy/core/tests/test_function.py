@@ -592,22 +592,36 @@ def test_Subs_ordered_identity_with_nested_points():
     assert first != second
 
 
-def test_Subs_function_target_identity():
+@pytest.mark.parametrize('variables, points, other_variables, other_points, expected', [
+    ((f, x), (sin, 0), (x, f), (0, sin), S.One),
+    ((x, f, y), (y, sin, z), (f, x, y), (sin, y, z), cos(z)),
+])
+def test_Subs_function_target_identity(variables, points,
+        other_variables, other_points, expected):
     source = Derivative(f(x), x)
-    first = Subs(source, (f, x), (sin, 0))
-    second = Subs(source, (x, f), (0, sin))
+    first = Subs(source, variables, points)
+    second = Subs(source, other_variables, other_points)
     assert first == second
     assert hash(first) == hash(second)
-    assert first.doit() == second.doit() == 1
+    assert first.doit() == second.doit() == expected
 
 
-@pytest.mark.xfail(strict=True, reason='Subs identity loses function replacements')
 @pytest.mark.parametrize('expr, variables, points, other_variables, other_points, forward, backward', [
     (f(x), (f,), (sin,), (f,), (cos,), sin(x), cos(x)),
     (f(x), (g, x, y), (sin, y, z), (g, y, x), (sin, z, y), f(z), f(y)),
     (f(x), (f, g), (g, sin), (g, f), (sin, g), sin(x), g(x)),
     (Derivative(f(x), x), (f, x), (sin, 0), (f, x), (cos, 0), S.One, S.Zero),
-], ids=['single_function', 'mixed_targets', 'function_chain', 'derivative'])
+    (Derivative(f(x), x), (f, x, y), (sin, y, z), (y, x, f),
+     (z, y, sin), cos(z), cos(y)),
+    (f(x, y), (f,), (Lambda((t, z), t + z),), (f,),
+     (Lambda((t, z), t*z),), x + y, x*y),
+    (f(x), (f,), (Function('a', positive=True),), (f,),
+     (Function('a', negative=True),),
+     Function('a', positive=True)(x), Function('a', negative=True)(x)),
+    (f(x), (f,), (Function('a', nargs=1),), (f,),
+     (Function('a', nargs=2),), Function('a', nargs=1)(x), f(x)),
+], ids=['single_function', 'mixed_targets', 'function_chain', 'derivative',
+        'derivative_chain', 'lambda', 'assumptions', 'arity'])
 def test_Subs_function_replacement_identity(expr, variables, points,
         other_variables, other_points, forward, backward):
     first = Subs(expr, variables, points)
@@ -619,6 +633,29 @@ def test_Subs_function_replacement_identity(expr, variables, points,
     assert h(first).doit() == h(forward)
     assert h(second).doit() == h(backward)
     assert (first + second).doit() == forward + backward
+
+
+def test_Subs_recreated_function_class_identity():
+    first_function = Function('F')
+    first = Subs(first_function(x), first_function, sin)
+    first_hash = hash(first)
+    clear_cache()
+    second_function = Function('F')
+    second = Subs(second_function(x), second_function, sin)
+    assert first == second
+    assert first_hash == hash(second)
+
+
+def test_Subs_self_mappings():
+    source = Derivative(sin(x + y), x)
+    first = Subs(source, (f, x, y), (f, x, 0))
+    second = Subs(source, (x, y, f), (x, 0, f))
+    assert first == second
+    assert first.doit() == second.doit() == cos(x)
+
+
+def test_Subs_derivative_creates_target():
+    assert Subs(Derivative(x**3, x), x**2, 1).doit() == 3
 
 
 def test_Subs_unused_targets_addition():
