@@ -9,6 +9,7 @@ from sympy.core.containers import Dict, Tuple
 from sympy.core.expr import Expr, unchanged
 from sympy.core.function import (Subs, Function, diff, Lambda, expand,
     nfloat, Derivative)
+from sympy.core.mul import Mul
 from sympy.core.numbers import E, Float, Integer, zoo, Rational, pi, I, oo, nan
 from sympy.core.power import Pow
 from sympy.core.relational import Eq
@@ -28,7 +29,7 @@ from sympy.series.order import O
 from sympy.tensor.indexed import Indexed
 from sympy.core.function import (PoleError, _mexpand, arity,
         BadSignatureError, BadArgumentsError)
-from sympy.core.parameters import _exp_is_pow, evaluate
+from sympy.core.parameters import _exp_is_pow, distribute, evaluate
 from sympy.core.sympify import sympify, SympifyError
 from sympy.matrices import MutableMatrix, ImmutableMatrix
 from sympy.sets.sets import FiniteSet
@@ -649,6 +650,25 @@ def test_Subs_recreated_function_class_identity():
     assert first_hash == hash(second)
 
 
+@pytest.mark.parametrize('first_function, second_function', [
+    (sin, cos),
+    (Function('a'), Function('b')),
+    (Function('a', nargs=1), Function('a', nargs=2)),
+    (Function('a', positive=True), Function('a', negative=True)),
+    (Function('a', value=Symbol('s', positive=True)),
+     Function('a', value=Symbol('s', negative=True))),
+    (Function('a', value=Float(1, 10)), Function('a', value=Float(1, 20))),
+])
+def test_Subs_function_replacement_ordering(first_function, second_function):
+    first = Subs(f(x), f, first_function)
+    second = Subs(f(x), f, second_function)
+    assert first != second
+    assert first + second == second + first
+    assert first * second == second * first
+    assert str(first + second) == str(second + first)
+    assert (first + second).as_ordered_terms() == (second + first).as_ordered_terms()
+
+
 def test_Subs_symbol_class_target_identity():
     positive = Symbol('a', positive=True)
     negative = Symbol('a', negative=True)
@@ -671,6 +691,12 @@ def test_Subs_self_mappings():
 
 def test_Subs_derivative_creates_target():
     assert Subs(Derivative(x**3, x), x**2, 1).doit() == 3
+
+
+def test_Subs_deferred_derivative_dependencies():
+    assert Subs(Derivative(y, x), (y, z), (z, x)).doit() == 1
+    assert Subs(Derivative(y**2, x), (y, z), (z, x)).doit() == 2*x
+    assert Subs(Derivative(y, x), (z, y), (x, z)).doit() == 0
 
 
 def test_Subs_unused_targets_addition():
@@ -700,6 +726,30 @@ def test_Subs_comparison_context():
             first_hash = hash(first)
         assert first == second
         assert first_hash == hash(second)
+
+
+@pytest.mark.parametrize('value', [
+    Pow(x, 0, evaluate=False),
+    exp(x, evaluate=False),
+    Mul(2, x + 1, evaluate=False),
+])
+def test_Subs_comparison_context_with_evaluation(value):
+    class HeldConstant(Function):
+        @classmethod
+        def eval(cls, arg):
+            return value
+
+    source = HeldConstant(x, evaluate=False)
+    for context in (evaluate(False), distribute(False), _exp_is_pow(True)):
+        first = Subs(source, x, 0)
+        second = Subs(source, x, 0)
+        with context:
+            first_hash = hash(first)
+            third = Subs(source, x, 0)
+            third_hash = hash(third)
+        assert first.args == second.args == third.args
+        assert first == second == third == first.func(*first.args)
+        assert first_hash == hash(second) == third_hash
 
 
 def test_doitdoit():

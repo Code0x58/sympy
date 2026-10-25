@@ -65,6 +65,18 @@ def test_compare_function_classes():
     assert Tuple(f).compare(Tuple(named_like_metaclass)) == 1
     assert Tuple(named_like_metaclass).compare(Tuple(f)) == -1
 
+    for first, second in [
+        (Function('a', nargs=1), Function('a', nargs=2)),
+        (Function('a', positive=True), Function('a', negative=True)),
+    ]:
+        assert first != second
+        assert Tuple(first).compare(Tuple(second)) != 0
+        assert Tuple(first).compare(Tuple(second)) == -Tuple(second).compare(Tuple(first))
+    first = Function('a', positive=True)(x)
+    second = Function('a', negative=True)(x)
+    assert first.compare(second) == -second.compare(first) != 0
+    assert first + second == second + first
+
 
 def test_equality():
     instances = [b1, b2, b3, b21, Basic(b1, b1, b1), Basic]

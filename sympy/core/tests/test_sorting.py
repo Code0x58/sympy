@@ -1,5 +1,11 @@
 from __future__ import annotations
+from sympy.core.containers import Tuple
+from sympy.core.cache import clear_cache
+from sympy.core.function import Function
+from sympy.core.numbers import Float
 from sympy.core.sorting import default_sort_key, ordered
+from sympy.core.symbol import Symbol
+from sympy.functions.elementary.trigonometric import cos, sin
 from sympy.testing.pytest import raises
 
 from sympy.abc import x
@@ -14,6 +20,30 @@ def test_default_sort_key():
             return 'x.y'
     func = C()
     assert sorted([x, func], key=default_sort_key) == [func, x]
+
+
+def test_class_sort_keys():
+    for first, second in [
+        (sin, cos),
+        (Function('a', nargs=1), Function('a', nargs=2)),
+        (Function('a', positive=True), Function('a', negative=True)),
+        (Function('a', value=Symbol('s', positive=True)),
+         Function('a', value=Symbol('s', negative=True))),
+        (Function('a', value=Float(1, 10)), Function('a', value=Float(1, 20))),
+        (type('a', (Function,), {}), type('a', (Function,), {})),
+    ]:
+        first_key, second_key = default_sort_key(first), default_sort_key(second)
+        assert first_key != second_key
+        assert (first_key < second_key) != (second_key < first_key)
+        assert sorted([Tuple(first), Tuple(second)], key=default_sort_key) == \
+            sorted([Tuple(second), Tuple(first)], key=default_sort_key)
+
+    first = Function('a', nargs=1, value=Symbol('s', positive=True))
+    first_key = default_sort_key(first)
+    clear_cache()
+    second = Function('a', nargs=1, value=Symbol('s', positive=True))
+    assert first == second
+    assert first_key == default_sort_key(second)
 
 
 def test_ordered():

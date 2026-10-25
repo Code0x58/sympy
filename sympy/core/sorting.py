@@ -127,6 +127,19 @@ def default_sort_key(item, order=None):
     if isinstance(item, Basic):
         return item.sort_key(order=order)
 
+    if isinstance(item, type):
+        from .function import UndefinedFunction
+        if isinstance(item, UndefinedFunction):
+            args = (str(item),)
+            if item._kwargs:
+                args += (tuple((name, _metadata_sort_key(value, order=order))
+                    for name, value in sorted(item._kwargs.items())),)
+        else:
+            # Distinct class definitions can share a qualified name.
+            args = (str(item), item.__module__, item.__qualname__, id(item))
+        return ((0, 0, item.__class__.__name__), (len(args), args),
+                S.One.sort_key(), S.One)
+
     if iterable(item, exclude=str):
         if isinstance(item, dict):
             args = item.items()
@@ -164,6 +177,29 @@ def default_sort_key(item, order=None):
 
     return (cls_index, 0, item.__class__.__name__
             ), args, S.One.sort_key(), S.One
+
+
+def _metadata_sort_key(item, order=None):
+    from .basic import Basic
+    from .containers import Tuple
+
+    if isinstance(item, (int, float, complex)):
+        item = sympify(int(item) if isinstance(item, bool) else item)
+    if isinstance(item, Tuple):
+        item = item.args
+    elif isinstance(item, Basic):
+        # Include identity fields, such as Symbol assumptions, omitted by sort_key.
+        if item.is_Number:
+            return (1, default_sort_key(item.func, order=order),
+                    item._hashable_content())
+        return (1, default_sort_key(item.func, order=order),
+                _metadata_sort_key(item._hashable_content(), order=order))
+    if isinstance(item, (tuple, frozenset)):
+        keys = [_metadata_sort_key(arg, order=order) for arg in item]
+        if isinstance(item, frozenset):
+            return (3, tuple(sorted(keys)))
+        return (2, tuple(keys))
+    return (0, default_sort_key(item, order=order))
 
 
 def _node_count(e):

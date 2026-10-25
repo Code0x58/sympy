@@ -408,6 +408,11 @@ class Basic(Printable):
         c = _cmp_name(n1, n2)
         if c:
             return c
+        if n1 is not n2 and n1 != n2:
+            lk, rk = default_sort_key(n1), default_sort_key(n2)
+            c = bool(lk > rk) - bool(lk < rk)
+            if c:
+                return c
         #
         st = self._hashable_content()
         ot = other._hashable_content()
@@ -420,11 +425,13 @@ class Basic(Printable):
             if isinstance(l, Basic):
                 c = l.compare(r)
             elif isinstance(l, type):
-                if isinstance(r, Basic):
+                if l == r:
+                    c = 0
+                elif isinstance(r, Basic):
                     c = -r.compare(l)
                 else:
                     lk, rk = default_sort_key(l), default_sort_key(r)
-                    c = (lk > rk) - (lk < rk)
+                    c = bool(lk > rk) - bool(lk < rk)
             elif isinstance(l, frozenset):
                 l = Basic(*l) if isinstance(l, frozenset) else l
                 r = Basic(*r) if isinstance(r, frozenset) else r
@@ -482,6 +489,8 @@ class Basic(Printable):
         def inner_key(arg):
             if isinstance(arg, Basic):
                 return arg.sort_key(order)
+            elif isinstance(arg, type):
+                return default_sort_key(arg, order=order)
             else:
                 return arg
 

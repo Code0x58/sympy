@@ -47,7 +47,7 @@ from .logic import fuzzy_and, fuzzy_or, fuzzy_not, FuzzyBool
 from .mul import Mul
 from .numbers import Rational, Float, Integer
 from .operations import LatticeOp
-from .parameters import global_parameters
+from .parameters import global_parameters, evaluate, distribute, _exp_is_pow
 from .rules import Transform
 from .singleton import S
 from .sympify import sympify, _sympify
@@ -2398,8 +2398,17 @@ class Subs(Expr):
             break
 
         obj = Expr.__new__(cls, expr, Tuple(*variables), point)
-        obj._expr = expr.xreplace(dict(reps))
+        obj._expr = cls._xreplace_for_comparison(expr, dict(reps))
         return obj
+
+    @staticmethod
+    def _xreplace_for_comparison(expr, rule):
+        """Normalize identity independently of evaluation settings."""
+        if (not global_parameters.evaluate or not global_parameters.distribute
+                or global_parameters.exp_is_pow):
+            with evaluate(True), distribute(True), _exp_is_pow(False):
+                return expr.xreplace(rule)
+        return expr.xreplace(rule)
 
     def _eval_is_commutative(self):
         return self.expr.is_commutative
@@ -2510,7 +2519,8 @@ class Subs(Expr):
         """Retain normalized identity, adding argument order when needed."""
         variables = self.variables.args
         point = self.point.args
-        normalized = self._expr.xreplace(self.canonical_variables)
+        normalized = self._xreplace_for_comparison(
+            self._expr, self.canonical_variables)
         unused = [(v, p) for v, p in zip(variables, point)
                   if not self.expr.has(v)]
         key = (normalized,) + tuple(Tuple(*vp) for vp in ordered(unused))
