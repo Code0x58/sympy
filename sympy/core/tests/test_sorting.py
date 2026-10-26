@@ -1,8 +1,11 @@
 from __future__ import annotations
 import pytest
+import gc
 from decimal import Decimal
 from fractions import Fraction
 from functools import partial
+from pickle import dumps, loads
+from weakref import ref
 from sympy.core.basic import Basic
 from sympy.core.containers import Tuple
 from sympy.core.cache import clear_cache
@@ -57,6 +60,67 @@ def test_equal_numeric_metadata_sort_keys():
     second = Function('a', value=Fraction(2))
     assert first == second
     assert default_sort_key(first) == default_sort_key(second)
+
+
+def test_equal_opaque_metadata_sort_keys():
+    class Value:
+        def __init__(self, label):
+            self.label = label
+
+        def __eq__(self, other):
+            return isinstance(other, Value) and self.label == other.label
+
+        def __hash__(self):
+            return 0
+
+    first = Function('a', value=Value(1))
+    first_key = default_sort_key(first)
+    clear_cache()
+    second = Function('a', value=Value(1))
+    other = Function('a', value=Value(2))
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first_key == default_sort_key(second)
+    assert first_key != default_sort_key(other)
+    assert first(x) + other(x) == second(x) + other(x) == other(x) + first(x)
+    assert first(x).compare(other(x)) == -other(x).compare(second(x)) != 0
+    del first, second
+    clear_cache()
+    gc.collect()
+    rebuilt = Function('a', value=Value(1))
+    assert first_key == default_sort_key(rebuilt)
+
+
+def test_metadata_sort_key_collection():
+    class Value:
+        pass
+
+    value = Value()
+    function = Function('a', value=value)
+    value.owner = function
+    value_ref, function_ref = ref(value), ref(function)
+    default_sort_key(function)
+    clear_cache()
+    del value, function
+    gc.collect()
+    assert value_ref() is None
+    assert function_ref() is None
+
+
+def test_metadata_sort_key_reconstruction():
+    value = Symbol('pickle_key_value')
+    first = Function('a', value=value)
+    saved_key = loads(dumps(default_sort_key(first)))
+    other = Function('a', value=Symbol('other_pickle_key_value'))
+    other_key = default_sort_key(other)
+    assert saved_key < other_key
+    del first
+    clear_cache()
+    gc.collect()
+    rebuilt = Function('a', value=value)
+    assert saved_key == default_sort_key(rebuilt)
+    assert saved_key < other_key
+    assert default_sort_key(rebuilt) < other_key
 
 
 @pytest.mark.parametrize('value, equivalent', [

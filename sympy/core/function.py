@@ -36,7 +36,10 @@ from typing import Any
 from collections.abc import Iterable
 import copyreg
 from decimal import Decimal
+from itertools import count as _count
 from numbers import Number
+from threading import RLock
+from weakref import ref, WeakValueDictionary
 
 from .add import Add
 from .basic import Basic, _atomic
@@ -936,6 +939,53 @@ class UndefSageHelper:
 _undef_sage_helper = UndefSageHelper()
 
 
+class _ComparisonKey:
+    """Give hashable equality classes a stable order while their keys are live."""
+    __slots__ = ('value', 'index', '_hash', '__weakref__')
+
+    def __init__(self, value):
+        self.value = value
+        self._hash = hash(value)
+        self.index = -1
+
+    def __hash__(self):
+        return self._hash
+
+    def __eq__(self, other):
+        if not isinstance(other, _ComparisonKey):
+            return NotImplemented
+        return self.value == other.value
+
+    def __lt__(self, other):
+        if not isinstance(other, _ComparisonKey):
+            return NotImplemented
+        return self.index < other.index
+
+    def __repr__(self):
+        return '_ComparisonKey(%s)' % self.index
+
+    def __reduce__(self):
+        return _get_comparison_key, (self.value,)
+
+
+_comparison_keys = WeakValueDictionary()
+_comparison_key_indices = _count()
+_comparison_key_lock = RLock()
+
+
+def _get_comparison_key(value):
+    candidate = _ComparisonKey(value)
+    reference = ref(candidate)
+    with _comparison_key_lock:
+        key = _comparison_keys.get(reference)
+        if key is None:
+            candidate.index = next(_comparison_key_indices)
+            # Both sides are weak so values can refer back to their owners.
+            _comparison_keys[reference] = candidate
+            key = candidate
+        return key
+
+
 def _canonical_function_metadata(value):
     """Canonicalize metadata, retaining the SymPy type of each container."""
     if isinstance(value, Basic):
@@ -1007,6 +1057,9 @@ class UndefinedFunction(FunctionClass):
         # Keep the original keyword values for reconstruction.
         __dict__['_kwargs'] = kwargs
         __dict__['_identity_kwargs'] = _function_metadata_key(kwargs)
+        __dict__['_metadata_sort_key'] = (
+            (_get_comparison_key((mcl, __dict__['_identity_kwargs'])),)
+            if kwargs or mcl is not UndefinedFunction else ())
         # do this for pickling
         __dict__['__module__'] = None
         obj = super().__new__(mcl, name, bases, __dict__)  # type: ignore
@@ -1019,6 +1072,7 @@ class UndefinedFunction(FunctionClass):
 
     _kwargs: dict[str, Any] = {}
     _identity_kwargs: tuple[tuple[str, Any], ...] = ()
+    _metadata_sort_key: tuple = ()
 
     def __hash__(self):
         return hash((self.class_key(), self._identity_kwargs))
@@ -2382,6 +2436,9 @@ class Subs(Expr):
     a target is compound or repeated, or an earlier point contains a later
     target. Class targets retain their bindings too; for derivatives,
     function replacements precede expression replacements.
+
+    Point identity includes assumptions and function metadata. Noncommutative
+    points and ambiguous internal labels also retain the original arguments.
     """
     def __new__(cls, expr, variables, point, **assumptions):
         if not is_sequence(variables, Tuple):
@@ -2443,6 +2500,9 @@ class Subs(Expr):
             break
 
         obj = Expr.__new__(cls, expr, Tuple(*variables), point)
+        obj._has_clashing_symbols = (
+            len(set(s_pts.values())) != len(s_pts) or
+            any(r in free and r not in variables for _, r in reps))
         obj._expr = cls._xreplace_for_comparison(expr, dict(reps))
         return obj
 
@@ -2560,14 +2620,16 @@ class Subs(Expr):
 
     @cached_property
     def _comparison_key(self):
-        """Retain normalized identity, appending ordered arguments when needed."""
+        """Refine normalized identity with point identity and ordered arguments."""
         variables = self.variables.args
         point = self.point.args
         normalized = self._xreplace_for_comparison(
             self._expr, self.canonical_variables)
         unused = [(v, p) for v, p in zip(variables, point)
                   if not self.expr.has(v)]
-        key = (Tuple(normalized, *(Tuple(*vp) for vp in ordered(unused))),)
+        # Printed point names do not encode assumptions or class identity.
+        key = (Tuple(normalized, *(Tuple(*vp) for vp in ordered(unused))),
+               _get_comparison_key(frozenset(point)))
 
         # Class targets are not expression instances; retain their bindings.
         if any(isinstance(v, type) for v in variables):
@@ -2578,6 +2640,16 @@ class Subs(Expr):
                 variables, point = zip(*(functions + expressions))
                 return key + (self.expr, Tuple(*variables), Tuple(*point))
             return key + super()._hashable_content()
+        if (self._has_clashing_symbols or
+                any(getattr(p, 'is_commutative', None) is False for p in point)):
+            return key + super()._hashable_content()
+        if len(variables) == 1 and not variables[0].is_Symbol:
+            # Algebraic substitution can also match parts of larger expressions.
+            with evaluate(True), distribute(True), _exp_is_pow(False):
+                variable = variables[0]
+                marker = Dummy(commutative=variable.is_commutative is not False)
+                if self.expr.subs(variable, marker) != self.expr.xreplace({variable: marker}):
+                    return key + super()._hashable_content()
         if len(variables) > 1:
             # later holds targets to the right; retain order if a point
             # depends on one, or targets are compound or repeated.

@@ -1,7 +1,5 @@
 from __future__ import annotations
 from collections import defaultdict
-from decimal import Decimal
-from numbers import Complex
 
 from .sympify import sympify, SympifyError
 from sympy.utilities.iterables import iterable, uniq
@@ -43,7 +41,7 @@ def default_sort_key(item, order=None):
     Here are some examples of the key that is produced:
 
     >>> default_sort_key(UndefinedFunction('f'))
-    ((0, 0, 'UndefinedFunction'), (2, ('f', ())), ((1, 0, 'Number'),
+    ((0, 0, 'UndefinedFunction'), (2, ((4, 0, 'f'), ())), ((1, 0, 'Number'),
         (0, ()), (), 1), 1)
     >>> default_sort_key('1')
     ((0, 0, 'str'), (1, ('1',)), ((1, 0, 'Number'), (0, ()), (), 1), 1)
@@ -132,8 +130,7 @@ def default_sort_key(item, order=None):
     if isinstance(item, type):
         from .function import UndefinedFunction
         if isinstance(item, UndefinedFunction):
-            args = (str(item), tuple((name, _metadata_sort_key(value, order=order))
-                for name, value in item._identity_kwargs))
+            args = (item.class_key(), item._metadata_sort_key)
         else:
             # Distinct class definitions can share a qualified name.
             args = (str(item), str(item.__module__), item.__qualname__, id(item))
@@ -175,32 +172,6 @@ def default_sort_key(item, order=None):
 
     return (cls_index, 0, item.__class__.__name__
             ), args, S.One.sort_key(), S.One
-
-
-def _metadata_sort_key(item, order=None):
-    from .basic import Basic
-
-    if type(item).__eq__ is object.__eq__:
-        return (0, default_sort_key(item, order=order), id(item))
-    if isinstance(item, Basic):
-        # Include identity fields, such as Symbol assumptions, omitted by sort_key.
-        return (1, default_sort_key(type(item), order=order),
-                _metadata_sort_key(item._hashable_content(), order=order))
-    if isinstance(item, (tuple, frozenset)) and type(item).__eq__ in (
-            tuple.__eq__, frozenset.__eq__):
-        keys = [_metadata_sort_key(arg, order=order) for arg in item]
-        if isinstance(item, frozenset):
-            return (3, tuple(sorted(keys)))
-        return (2, tuple(keys))
-    if isinstance(item, (Complex, Decimal)):
-        # Numeric fields use Python equality; NaNs need object identity.
-        if item != item:
-            return (4, 1, id(item))
-        return (4, 0, item.real, item.imag)
-    if isinstance(item, (str, bytes)) and type(item).__eq__ in (
-            str.__eq__, bytes.__eq__):
-        item = str.__str__(item) if isinstance(item, str) else bytes.__bytes__(item)
-    return (0, default_sort_key(item, order=order), 0)
 
 
 def _node_count(e):

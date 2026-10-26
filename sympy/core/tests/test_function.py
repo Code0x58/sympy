@@ -12,7 +12,7 @@ from sympy.core.cache import clear_cache
 from sympy.core.containers import Dict, Tuple
 from sympy.core.expr import Expr, unchanged
 from sympy.core.function import (Subs, Function, diff, Lambda, expand,
-    nfloat, Derivative)
+    nfloat, Derivative, UndefinedFunction)
 from sympy.core.mul import Mul
 from sympy.core.numbers import E, Float, Integer, zoo, Rational, pi, I, oo, nan
 from sympy.core.power import Pow
@@ -578,6 +578,61 @@ def test_Subs_independent_identity():
     assert Subs(f(x**2), x**2, 0) == Subs(f(y**2), y**2, 0)
 
 
+@pytest.mark.parametrize('point, other_point', [
+    (Symbol('a', positive=True), Symbol('a', negative=True)),
+    (Function('a', positive=True)(t), Function('a', negative=True)(t)),
+])
+def test_Subs_point_identity(point, other_point):
+    first = Subs(f(x), x, point)
+    second = Subs(f(x), x, other_point)
+    assert first != second
+    assert first.doit() != second.doit()
+    assert first + second == second + first
+    assert (first + second).doit() == f(point) + f(other_point)
+
+
+def test_Subs_clashing_point_names():
+    positive = Symbol('a', positive=True)
+    negative = Symbol('a', negative=True)
+    first = Subs(f(x, y), (x, y), (positive, negative))
+    second = Subs(f(x, y), (x, y), (negative, positive))
+    assert first != second
+    assert first.doit() == f(positive, negative)
+    assert second.doit() == f(negative, positive)
+
+
+@pytest.mark.parametrize('first_expr, first_target, second_expr, second_target, first_result, second_result', [
+    (f(x + y + z), x + y, f(x + y + z), y + z, f(z), f(x)),
+    (f(x + y, x + y + z), x + y,
+     f(x + z, x + y + z), x + z, f(0, z), f(0, y)),
+])
+def test_Subs_compound_target_identity(first_expr, first_target,
+        second_expr, second_target, first_result, second_result):
+    first = Subs(first_expr, first_target, 0)
+    second = Subs(second_expr, second_target, 0)
+    assert first != second
+    assert first.doit() == first_result
+    assert second.doit() == second_result
+
+
+def test_Subs_noncommutative_identity():
+    u, v, w = symbols('u v w', commutative=False)
+    first = Subs(f(u*v), u, w)
+    second = Subs(f(v*u), u, w)
+    assert first != second
+    assert first.doit() == f(w*v)
+    assert second.doit() == f(v*w)
+
+
+def test_Subs_free_placeholder_identity():
+    placeholder = Symbol('_0')
+    first = Subs(x + placeholder, x, 0)
+    second = Subs(2*x, x, 0)
+    assert first != second
+    assert first.doit() == placeholder
+    assert second.doit() == 0
+
+
 def test_Subs_repeated_target_identity():
     first = Subs(Subs(f(x), x, 0), x, 1)
     second = Subs(f(x), x, 1)
@@ -727,6 +782,16 @@ def test_function_shared_callable_metadata():
     assert first == second
     assert first_hash == hash(second)
     assert first(x).compare(second(x)) == 0
+
+
+def test_function_metaclass_identity():
+    Metaclass = type('UndefinedFunction', (UndefinedFunction,), {})
+    first = Function('a')
+    second = Metaclass('a')
+    assert first != second
+    assert second != first
+    assert first(x).compare(second(x)) == -second(x).compare(first(x)) != 0
+    assert first(x) + second(x) == second(x) + first(x)
 
 
 @pytest.mark.parametrize('name', ['key', 'metadata_key'])
