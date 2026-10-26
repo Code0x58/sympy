@@ -36,8 +36,8 @@ from typing import Any
 from collections.abc import Iterable
 import copyreg
 from decimal import Decimal
+from fractions import Fraction
 from itertools import count as _count
-from numbers import Number
 from threading import RLock
 from weakref import ref, WeakValueDictionary
 
@@ -987,7 +987,7 @@ def _get_comparison_key(value):
 
 
 def _canonical_function_metadata(value):
-    """Canonicalize metadata, retaining the SymPy type of each container."""
+    """Canonicalize standard values, retaining complete subclass identities."""
     if isinstance(value, Basic):
         if isinstance(value, Tuple):
             if type(value) is not Tuple:
@@ -999,28 +999,33 @@ def _canonical_function_metadata(value):
                 return (type(value), value)
             return (type(value), frozenset(map(_canonical_function_metadata, value.args)))
         return value
-    if isinstance(value, Number):
-        if isinstance(value, Decimal) and value.is_finite():
+    if (type(value) is bool or type(value) is int or type(value) is float or
+            type(value) is complex or type(value) is Decimal or type(value) is Fraction):
+        if type(value) is Decimal and value.is_finite():
             return Rational(*value.as_integer_ratio())
         return sympify(value)
+    # Built-in container equality uses stored contents, not overridden iteration.
     if isinstance(value, tuple) and type(value).__eq__ is tuple.__eq__:
-        return (Tuple, tuple(map(_canonical_function_metadata, value)))
+        return (Tuple, tuple(map(_canonical_function_metadata, tuple.__iter__(value))))
     if isinstance(value, frozenset) and type(value).__eq__ is frozenset.__eq__:
         from sympy.sets.sets import FiniteSet
-        cls = FiniteSet if value else S.EmptySet.func
-        return (cls, frozenset(map(_canonical_function_metadata, value)))
+        cls = FiniteSet if frozenset.__len__(value) else S.EmptySet.func
+        return (cls, frozenset(map(_canonical_function_metadata, frozenset.__iter__(value))))
     return (type(value), value)
+
+
+_empty_function_metadata = frozenset()
 
 
 def _function_metadata_key(kwargs):
     if not kwargs:
-        return ()
+        return _empty_function_metadata
     if (not global_parameters.evaluate or not global_parameters.distribute
             or global_parameters.exp_is_pow):
         with evaluate(True), distribute(True), _exp_is_pow(False):
             return _function_metadata_key(kwargs)
-    return tuple((key, _canonical_function_metadata(value))
-        for key, value in sorted(kwargs.items()))
+    return frozenset((key, _canonical_function_metadata(value))
+        for key, value in kwargs.items())
 
 
 class UndefinedFunction(FunctionClass):
@@ -1071,7 +1076,7 @@ class UndefinedFunction(FunctionClass):
         return cls in type(instance).__mro__
 
     _kwargs: dict[str, Any] = {}
-    _identity_kwargs: tuple[tuple[str, Any], ...] = ()
+    _identity_kwargs: frozenset[tuple[str, Any]] = _empty_function_metadata
     _metadata_sort_key: tuple = ()
 
     def __hash__(self):
@@ -2641,7 +2646,7 @@ class Subs(Expr):
                 return key + (self.expr, Tuple(*variables), Tuple(*point))
             return key + super()._hashable_content()
         if (self._has_clashing_symbols or
-                any(getattr(p, 'is_commutative', None) is False for p in point)):
+                any(getattr(p, 'is_commutative', None) is not True for p in point)):
             return key + super()._hashable_content()
         if len(variables) == 1 and not variables[0].is_Symbol:
             # Algebraic substitution can also match parts of larger expressions.

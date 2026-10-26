@@ -615,13 +615,16 @@ def test_Subs_compound_target_identity(first_expr, first_target,
     assert second.doit() == second_result
 
 
-def test_Subs_noncommutative_identity():
-    u, v, w = symbols('u v w', commutative=False)
-    first = Subs(f(u*v), u, w)
-    second = Subs(f(v*u), u, w)
+@pytest.mark.parametrize('point', [Symbol('w', commutative=False), Expr(w)])
+def test_Subs_noncommutative_identity(point):
+    u, v = symbols('u v', commutative=False)
+    first = Subs(f(u*v), u, point)
+    second = Subs(f(v*u), u, point)
     assert first != second
-    assert first.doit() == f(w*v)
-    assert second.doit() == f(v*w)
+    assert first.doit() == f(point*v)
+    assert second.doit() == f(v*point)
+    assert first.doit() != second.doit()
+    assert (first + second).doit() == f(point*v) + f(v*point)
 
 
 def test_Subs_free_placeholder_identity():
@@ -805,6 +808,23 @@ def test_function_metadata_keyword_names(name):
     assert hash(first) == hash(rebuilt)
 
 
+def test_function_metadata_keyword_order():
+    class Keyword(str):
+        __slots__ = ()
+
+        def __lt__(self, other):
+            raise TypeError('keyword names do not define an order')
+
+    kwargs = {Keyword('first'): 1, Keyword('second'): 2}
+    first = Function('a', **kwargs)
+    assert (first.first, first.second) == (1, 2)
+    clear_cache()
+    second = Function('a', **dict(reversed(list(kwargs.items()))))
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first(x).compare(second(x)) == 0
+
+
 @pytest.mark.parametrize('base, args', [
     (tuple, ([2],)), (frozenset, ([2],)), (Tuple, (2,)), (FiniteSet, (2,)),
 ])
@@ -818,6 +838,32 @@ def test_function_identity_metadata_containers(base, args):
     left = Subs(f(x), f, first)
     right = Subs(f(x), f, second)
     assert left + right == right + left
+
+
+@pytest.mark.parametrize('base', [tuple, frozenset])
+def test_function_metadata_container_storage(base):
+    class Container(base):
+        __slots__ = ()
+
+        def __iter__(self):
+            return iter([2])
+
+        def __len__(self):
+            raise TypeError('iteration and length do not expose stored contents')
+
+    value = Container([1])
+    first = Function('a', value=value)
+    equivalent = Function('a', value=base([1]))
+    second = Function('a', value=base([2]))
+    assert first.value is value
+    assert first == equivalent
+    assert hash(first) == hash(equivalent)
+    assert first != second
+    assert first(x) + second(x) == second(x) + first(x)
+    clear_cache()
+    rebuilt = Function('a', value=Container([1]))
+    assert first == rebuilt
+    assert hash(first) == hash(rebuilt)
 
 
 @pytest.mark.parametrize('base', [Tuple, FiniteSet])
@@ -901,6 +947,33 @@ def test_function_numeric_subclass_metadata():
     second = Function('a', value=right)
     assert first != second
     assert first(x) + second(x) == second(x) + first(x)
+
+
+@pytest.mark.parametrize('base, args', [
+    (int, (1,)), (float, (1.5,)), (complex, (2, 3)),
+    (Fraction, (3, 5)), (Decimal, ('0.1',)),
+])
+def test_function_native_numeric_subclass_metadata(base, args):
+    class TaggedNumber(base):
+        def __eq__(self, other):
+            return (type(self) is type(other) and base.__eq__(self, other)
+                    and self.tag == other.tag)
+
+        def __hash__(self):
+            return hash((base.__hash__(self), self.tag))
+
+    left, right, equivalent = [TaggedNumber(*args) for _ in range(3)]
+    left.tag, right.tag, equivalent.tag = 'left', 'right', 'left'
+    first = Function('a', value=left)
+    second = Function('a', value=right)
+    assert first != second
+    assert len({first, second}) == 2
+    assert first(x) + second(x) == second(x) + first(x)
+    clear_cache()
+    rebuilt = Function('a', value=equivalent)
+    assert first == rebuilt
+    assert hash(first) == hash(rebuilt)
+    assert first(x) + second(x) == rebuilt(x) + second(x)
 
 
 @pytest.mark.parametrize('first_function, second_function', [
