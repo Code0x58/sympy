@@ -177,6 +177,25 @@ def arity(cls):
         lambda p:p.default == p.empty, binary=True))
     return no if not yes else tuple(range(no, no + yes + 1))
 
+def _canonical_nargs(nargs):
+    """Normalize arity for construction, comparison, and caching."""
+    if getattr(nargs, 'sup', None) is S.Infinity and hasattr(nargs, 'is_FiniteSet'):
+        return nargs
+    if is_sequence(nargs):
+        if not nargs:
+            raise ValueError(filldedent('''
+                Incorrectly specified nargs as %s:
+                if there are no arguments, it should be
+                `nargs = 0`;
+                if there are any number of arguments,
+                it should be
+                `nargs = None`''' % str(nargs)))
+        return tuple(ordered(set(nargs)))
+    if nargs is not None:
+        return (as_int(nargs),)
+    return None
+
+
 class FunctionClass(type):
     """
     Base class for function classes. FunctionClass is a subclass of type.
@@ -198,24 +217,7 @@ class FunctionClass(type):
                 else:
                     continue
 
-        # Canonicalize nargs here; change to set in nargs.
-        if getattr(nargs, 'sup', None) is S.Infinity and hasattr(nargs, 'is_FiniteSet'):
-            # an unbounded set of integers, e.g. Naturals or Range(3, oo),
-            # is kept as-is (importing it here would cause a cyclic import)
-            pass
-        elif is_sequence(nargs):
-            if not nargs:
-                raise ValueError(filldedent('''
-                    Incorrectly specified nargs as %s:
-                    if there are no arguments, it should be
-                    `nargs = 0`;
-                    if there are any number of arguments,
-                    it should be
-                    `nargs = None`''' % str(nargs)))
-            nargs = tuple(ordered(set(nargs)))
-        elif nargs is not None:
-            nargs = (as_int(nargs),)
-        cls._nargs = nargs
+        cls._nargs = _canonical_nargs(nargs)
 
         # When __init__ is called from UndefinedFunction it is called with
         # just one arg but when it is called from subclassing Function it is
@@ -1034,6 +1036,11 @@ _empty_function_metadata = frozenset()
 def _function_metadata_key(kwargs):
     if not kwargs:
         return _empty_function_metadata
+    from .symbol import _filter_assumptions
+    assumptions, kwargs = _filter_assumptions(kwargs)
+    kwargs.update(assumptions)
+    if 'nargs' in kwargs:
+        kwargs['nargs'] = _canonical_nargs(kwargs['nargs'])
     if (not global_parameters.evaluate or not global_parameters.distribute
             or global_parameters.exp_is_pow):
         with evaluate(True), distribute(True), _exp_is_pow(False):
@@ -1070,6 +1077,8 @@ class UndefinedFunction(FunctionClass):
         # You can add other attributes, although they do have to be hashable
         # (but seriously, if you want to add anything other than assumptions,
         # just subclass Function)
+        if 'nargs' in kwargs:
+            kwargs['nargs'] = _canonical_nargs(kwargs['nargs'])
         __dict__.update(kwargs)
         # add back the sanitized assumptions without the is_ prefix
         kwargs.update(assumptions)
@@ -2669,6 +2678,11 @@ class Subs(Expr):
         # of subs for Subs is have the following invariant for
         # Subs object foo:
         #    foo.doit().subs(reps) == foo.subs(reps).doit()
+        def subs(arg):
+            if isinstance(arg, type):
+                return new if arg == old else arg
+            return arg._subs(old, new)
+
         pt = list(self.point)
         if old in self.variables:
             if _atomic(new) == {new} and not any(
@@ -2679,13 +2693,13 @@ class Subs(Expr):
             # handled by replacements from here on
             i = self.variables.index(old)
             for j in range(i, len(self.variables)):
-                pt[j] = pt[j]._subs(old, new)
+                pt[j] = subs(pt[j])
             return self.func(self.expr, self.variables, pt)
-        v = [i._subs(old, new) for i in self.variables]
+        v = [subs(i) for i in self.variables]
         if v != list(self.variables):
             return self.func(self.expr, self.variables + (old,), pt + [new])
         expr = self.expr._subs(old, new)
-        pt = [i._subs(old, new) for i in self.point]
+        pt = [subs(i) for i in self.point]
         return self.func(expr, v, pt)
 
     def _eval_derivative(self, s):

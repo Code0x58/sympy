@@ -31,7 +31,8 @@ def iterargs(expr):
     args = [expr]
     for i in args:
         yield i
-        args.extend(i.args)
+        if isinstance(i, Basic):
+            args.extend(i.args)
 
 
 def iterfreeargs(expr, _first=True):
@@ -57,11 +58,14 @@ def iterfreeargs(expr, _first=True):
     args = [expr]
     for i in args:
         yield i
+        if not isinstance(i, Basic):
+            continue
         if _first and hasattr(i, 'bound_symbols'):
             void = i.canonical_variables.values()
-            for i in iterfreeargs(i.as_dummy(), _first=False):
-                if not i.has(*void):
-                    yield i
+            for arg in iterfreeargs(i.as_dummy(), _first=False):
+                if not isinstance(arg, Basic) or not arg.has(*void):
+                    yield arg
+            continue
         args.extend(i.args)
 
 

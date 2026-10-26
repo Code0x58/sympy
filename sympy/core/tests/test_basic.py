@@ -7,10 +7,12 @@ from typing import TypeVar, Generic
 from sympy.assumptions.ask import Q
 from sympy.core.basic import (Basic, Atom, as_Basic,
     _atomic, _aresame)
+from sympy.core.cache import clear_cache
 from sympy.core.containers import Tuple
 from sympy.core.function import Function, Lambda
 from sympy.core.numbers import I, pi, Float
 from sympy.core.singleton import S
+from sympy.core.sorting import default_sort_key
 from sympy.core.symbol import symbols, Symbol, Dummy
 from sympy.concrete.summations import Sum
 from sympy.functions.elementary.trigonometric import (cos, sin)
@@ -92,6 +94,36 @@ def test_compare_class_and_native_transitivity():
     assert first.compare(second) < 0
     assert second.compare(third) < 0
     assert first.compare(third) < 0
+
+
+def test_sort_key_class_and_native_arguments():
+    for cls in (Function('f'), Symbol, int):
+        first = Basic(cls)
+        for value in (None, 1, 1.0, False, 'f', (1,), frozenset([1]), Symbol('x')):
+            second = Basic(value)
+            assert sorted([first, second], key=default_sort_key) == [second, first]
+            assert sorted([second, first], key=default_sort_key) == [second, first]
+    first = Basic(1)
+    first_key = first.sort_key()
+    for value in (1.0, True):
+        clear_cache()
+        second = Basic(value)
+        assert first == second
+        assert first_key == second.sort_key()
+
+
+def test_subs_class_arguments():
+    x, y = symbols('x y')
+    f, g = Function('f'), Function('g')
+    for cls in (f, Symbol):
+        source = Basic(cls, x)
+        assert source.subs(x, y) == Basic(cls, y)
+        assert source.subs(cls, g) == Basic(g, x)
+        assert source.xreplace({x: y}) == Basic(cls, y)
+        assert source.xreplace({cls: g}) == Basic(g, x)
+        assert source.replace(lambda node: node == x, lambda node: y) == Basic(cls, y)
+        assert source.has(x)
+        assert not source.has(y)
 
 
 def test_equality():

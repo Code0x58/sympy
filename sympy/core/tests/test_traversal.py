@@ -2,9 +2,9 @@ from __future__ import annotations
 from sympy.core.basic import Basic
 from sympy.core.containers import Tuple
 from sympy.core.sorting import default_sort_key
-from sympy.core.symbol import symbols
+from sympy.core.symbol import Symbol, symbols
 from sympy.core.singleton import S
-from sympy.core.function import expand, Function
+from sympy.core.function import expand, Function, Lambda
 from sympy.core.numbers import I
 from sympy.integrals.integrals import Integral
 from sympy.polys.polytools import factor
@@ -96,6 +96,18 @@ def test_iterargs():
         Integral(f(x), (f(x), 1)), 1]
     assert list(iterargs(Integral(f(x), (f(x), 1)))) == [
         Integral(f(x), (f(x), 1)), f(x), (f(x), 1), x, f(x), 1, x]
+
+
+def test_iterargs_atomic_arguments():
+    x = Symbol('x')
+    f = Function('f')
+    for value in (f, Symbol, int, 'label', 1):
+        source = Basic(value, x)
+        assert list(iterargs(source)) == [source, value, x]
+        assert list(iterfreeargs(source)) == [source, value, x]
+    source = Lambda(x, Tuple(x, f))
+    assert list(iterfreeargs(source)) == [source, f]
+
 
 def test_deprecated_imports():
     x = symbols('x')

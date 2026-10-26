@@ -224,6 +224,53 @@ def test_nargs_inheritance():
     assert f10.nargs == FiniteSet(1)
     assert f11.nargs == FiniteSet(1)
 
+
+@pytest.mark.parametrize('nargs', [[1, 2], [2, 1, 2], (2, 1), Tuple(1, 2)])
+def test_function_nargs_normalization(nargs):
+    function = Function('arity_normalization', nargs=nargs)
+    expected = Function('arity_normalization', nargs=(1, 2))
+    assert function.nargs == FiniteSet(1, 2)
+    assert function == expected
+    assert hash(function) == hash(expected)
+    assert function(x) == expected(x)
+    assert function(x, y) == expected(x, y)
+    raises(TypeError, lambda: function())
+    clear_cache()
+    rebuilt = loads(dumps(function))
+    assert rebuilt == function
+    assert hash(rebuilt) == hash(function)
+
+
+def test_function_nargs_validation():
+    assert Function('unary', nargs=1) == Function('unary', nargs=(1,))
+    for invalid in ([], (), Tuple(), {1, 2}):
+        raises(ValueError, lambda: Function('invalid_arity', nargs=invalid))
+
+
+def test_function_nargs_mutable_input():
+    nargs = [1, 2]
+    function = Function('mutable_arity', nargs=nargs)
+    first_hash = hash(function)
+    nargs.append(3)
+    assert function.nargs == FiniteSet(1, 2)
+    clear_cache()
+    rebuilt = loads(dumps(function))
+    assert rebuilt == function
+    assert hash(rebuilt) == first_hash
+    assert rebuilt.nargs == FiniteSet(1, 2)
+    raises(TypeError, lambda: rebuilt(x, y, z))
+
+
+@pytest.mark.parametrize('value', [[], [1]])
+def test_function_assumption_normalization(value):
+    function = Function('assumption_normalization', real=value)
+    expected = Function('assumption_normalization', real=bool(value))
+    assert function == expected
+    assert hash(function) == hash(expected)
+    assert function(x) == expected(x)
+    assert function.is_real is bool(value)
+
+
 def test_arity():
     f = lambda x, y: 1
     assert arity(f) == 2
@@ -831,6 +878,21 @@ def test_Subs_recreated_function_class_identity():
     second = Subs(second_function(x), second_function, sin)
     assert first == second
     assert first_hash == hash(second)
+
+
+def test_Subs_class_arguments_substitution():
+    source = Subs(f(x) + y, f, sin)
+    assert source.subs(y, 1) == Subs(f(x) + 1, f, sin)
+    assert source.subs(y, 1).doit() == sin(x) + 1
+    assert source.subs(x, z) == Subs(f(z) + y, f, sin)
+    assert source.subs(sin, cos) == Subs(f(x) + y, f, cos)
+    assert source.subs(sin, cos).doit() == cos(x) + y
+    assert source.subs(g(x), 1) == source
+    source = Subs(f(x) + y, (x, f), (0, sin))
+    assert source.subs(x, z) == Subs(f(z) + y, (z, f), (0, sin))
+    assert source.subs(x, z).doit() == y
+    source = Subs(f(x) + y, (Symbol, f), (1, sin))
+    assert source.subs(y, z) == Subs(f(x) + z, (Symbol, f), (1, sin))
 
 
 @pytest.mark.parametrize('value, equivalent', [

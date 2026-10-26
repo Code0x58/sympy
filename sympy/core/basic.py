@@ -490,11 +490,12 @@ class Basic(Printable):
 
         # XXX: remove this when issue 5169 is fixed
         def inner_key(arg):
+            # The leading flag keeps classes after other argument values.
             if isinstance(arg, Basic):
-                return arg.sort_key(order)
+                return False, arg.sort_key(order)
             if isinstance(arg, type):
-                return default_sort_key(arg, order=order)
-            return arg
+                return True, default_sort_key(arg, order=order)
+            return False, arg
 
         args = self._sorted_args
         args = len(args), tuple([inner_key(arg) for arg in args])
@@ -839,6 +840,8 @@ class Basic(Printable):
         canonical = {}
 
         def assign(x, used):
+            if not isinstance(x, Basic):
+                return
             used = set(used)
 
             for b in getattr(x, 'bound_symbols', ()):
@@ -1333,9 +1336,12 @@ class Basic(Printable):
             hit = False
             args = list(self.args)
             for i, arg in enumerate(args):
-                if not hasattr(arg, '_eval_subs'):
-                    continue
-                arg = arg._subs(old, new, **hints)
+                if isinstance(arg, type):
+                    arg = new if arg == old else arg
+                else:
+                    if not hasattr(arg, '_eval_subs'):
+                        continue
+                    arg = arg._subs(old, new, **hints)
                 if not _aresame(arg, args[i]):
                     hit = True
                     args[i] = arg
@@ -1454,6 +1460,10 @@ class Basic(Printable):
             args = []
             changed = False
             for a in self.args:
+                if isinstance(a, type):
+                    args.append(rule.get(a, a))
+                    changed |= a in rule
+                    continue
                 _xreplace = getattr(a, '_xreplace', None)
                 if _xreplace is not None:
                     a_xr = _xreplace(rule)
@@ -1847,6 +1857,8 @@ class Basic(Printable):
         def walk(rv, F):
             """Apply ``F`` to args and then to result.
             """
+            if isinstance(rv, type):
+                return rv
             args = getattr(rv, 'args', None)
             if args is not None:
                 if args:
