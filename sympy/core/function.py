@@ -2451,13 +2451,14 @@ class Subs(Expr):
     >>> s, ss
     (Subs(x, x, 0), Subs(y, y, 0))
 
-    For multiple expression targets, the comparison key keeps their order if
-    a target is compound or repeated, or an earlier point contains a later
-    target. Class targets retain their bindings too; for derivatives,
-    function replacements precede expression replacements.
+    Sequences of replacements and compound targets retain their ordered
+    arguments for comparison. Equal evaluated values alone do not make
+    substitution programs interchangeable. For derivatives, function
+    replacements precede expression replacements.
 
-    Point identity includes assumptions and function metadata. Noncommutative
-    points and ambiguous internal labels also retain the original arguments.
+    Point identity includes assumptions and function metadata. Targets with
+    assumptions, noncommutative points, and ambiguous internal labels also
+    retain the original arguments.
     """
     def __new__(cls, expr, variables, point, **assumptions):
         if not is_sequence(variables, Tuple):
@@ -2590,6 +2591,10 @@ class Subs(Expr):
         else:
             rv = e.doit(**hints).subs(replacements)
 
+        # Reordering an otherwise unchanged request is not evaluation progress.
+        if (isinstance(rv, Subs) and rv.expr == self.expr
+                and Counter(zip(rv.variables, rv.point)) == Counter(zip(v, p))):
+            return self
         if hints.get('deep', True) and rv != self:
             rv = rv.doit(**hints)
         return rv
@@ -2659,26 +2664,13 @@ class Subs(Expr):
                 variables, point = zip(*(functions + expressions))
                 return key + (self.expr, Tuple(*variables), Tuple(*point))
             return key + super()._hashable_content()
-        if (self._has_clashing_symbols or
-                any(getattr(p, 'is_commutative', None) is not True for p in point)):
+        # Normalize only one ordinary symbol: order and assumptions can become
+        # significant after further function or point replacements.
+        if (len(variables) != 1 or type(variables[0]) not in (Symbol, Dummy)
+                or variables[0].assumptions0 != {'commutative': True}
+                or self._has_clashing_symbols
+                or getattr(point[0], 'is_commutative', None) is not True):
             return key + super()._hashable_content()
-        if len(variables) == 1 and not variables[0].is_Symbol:
-            # Algebraic substitution can also match parts of larger expressions.
-            with evaluate(True), distribute(True), _exp_is_pow(False):
-                variable = variables[0]
-                marker = Dummy(commutative=variable.is_commutative is not False)
-                if self.expr.subs(variable, marker) != self.expr.xreplace({variable: marker}):
-                    return key + super()._hashable_content()
-        if len(variables) > 1:
-            # later holds targets to the right; retain order if a point
-            # depends on one, or targets are compound or repeated.
-            later = set()
-            for variable, value in zip(reversed(variables), reversed(point)):
-                if (not variable.is_Symbol or variable in later or
-                        value.free_symbols & later):
-                    return key + super()._hashable_content()
-                later.add(variable)
-
         return key
 
     def _eval_subs(self, old, new):

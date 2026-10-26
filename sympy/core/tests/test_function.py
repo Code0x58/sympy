@@ -7,6 +7,7 @@ from functools import partial
 from pickle import dumps, loads
 
 from sympy.concrete.summations import Sum
+from sympy.core.add import Add
 from sympy.core.basic import Basic, _aresame
 from sympy.core.cache import clear_cache
 from sympy.core.containers import Dict, Tuple
@@ -19,7 +20,7 @@ from sympy.core.power import Pow
 from sympy.core.relational import Eq
 from sympy.core.singleton import S
 from sympy.core.symbol import symbols, Dummy, Symbol
-from sympy.functions.elementary.complexes import im, re
+from sympy.functions.elementary.complexes import Abs, im, re, sign
 from sympy.functions.elementary.exponential import log, exp
 from sympy.functions.elementary.miscellaneous import sqrt
 from sympy.functions.elementary.piecewise import Piecewise
@@ -502,9 +503,13 @@ def test_Subs():
     assert Subs(f(x, y), (x, y), (0, 1)).point == Tuple(0, 1)
 
     assert Subs(f(x), x, 0) == Subs(f(y), y, 0)
-    assert Subs(f(x, y), (x, y), (0, 1)) == Subs(f(x, y), (y, x), (1, 0))
-    assert Subs(f(x)*y, (x, y), (0, 1)) == Subs(f(y)*x, (y, x), (0, 1))
-    assert Subs(f(x)*y, (x, y), (1, 1)) == Subs(f(y)*x, (x, y), (1, 1))
+    for first, second in [
+        (Subs(f(x, y), (x, y), (0, 1)), Subs(f(x, y), (y, x), (1, 0))),
+        (Subs(f(x)*y, (x, y), (0, 1)), Subs(f(y)*x, (y, x), (0, 1))),
+        (Subs(f(x)*y, (x, y), (1, 1)), Subs(f(y)*x, (x, y), (1, 1))),
+    ]:
+        assert first != second
+        assert first.doit() == second.doit()
 
     assert Subs(f(x), x, 0).subs(x, 1).doit() == f(0)
     assert Subs(f(x), x, y).subs(y, 0) == Subs(f(x), x, 0)
@@ -555,8 +560,12 @@ def test_Subs():
     (f(x**y, x**2), (y, x**2), (2, z), f(z, z), f(x**2, z)),
     (f(x), (x, y), (Subs(y, y, y), z), f(z), f(y)),
     (f(x), (x, y, z), (y, z, t), f(t), f(y)),
+    (x/y, (x, y), (0, 0), S.Zero, nan),
+    (x*y, (x, y), (0, oo), S.Zero, nan),
+    (x + y - Float('1e20', 15), (x, y), (Float('1e20', 15), 1), S.One, S.Zero),
 ], ids=['compound_point', 'symbol_point', 'overlapping_targets',
-        'affine_target', 'power_target', 'nested_point', 'three_targets'])
+        'affine_target', 'power_target', 'nested_point', 'three_targets',
+        'pole', 'infinite_point', 'rounding'])
 def test_Subs_ordered_identity(expr, variables, points, forward, backward):
     first = Subs(expr, variables, points)
     second = Subs(expr, variables[::-1], points[::-1])
@@ -568,14 +577,123 @@ def test_Subs_ordered_identity(expr, variables, points, forward, backward):
     assert (first + second).doit() == forward + backward
 
 
-def test_Subs_independent_identity():
+def test_Subs_independent_programs():
     first = Subs(f(x, y), (x, y), (0, 1))
     second = Subs(f(x, y), (y, x), (1, 0))
     renamed = Subs(f(t, z), (t, z), (0, 1))
-    assert first == second == renamed
-    assert hash(first) == hash(second) == hash(renamed)
+    assert len({first, second, renamed}) == 3
     assert first.doit() == second.doit() == renamed.doit() == f(0, 1)
-    assert Subs(f(x**2), x**2, 0) == Subs(f(y**2), y**2, 0)
+    first, second = Subs(f(x**2), x**2, 0), Subs(f(y**2), y**2, 0)
+    assert first != second
+    assert first.free_symbols == {x}
+    assert second.free_symbols == {y}
+    assert first.doit() == second.doit() == f(0)
+
+
+def test_Subs_order_after_function_definition():
+    first = Subs(f(x, y), (x, y), (0, 1))
+    second = Subs(f(x, y), (y, x), (1, 0))
+    assert first != second
+    assert first.doit() == second.doit() == f(0, 1)
+    definition = Lambda((t, z), t/(z - 1))
+    assert first.subs(f, definition).doit() == 0
+    assert second.subs(f, definition).doit() is nan
+
+
+def test_Subs_order_after_point_replacement():
+    first = Subs(x*y, (x, y), (0, 1))
+    second = Subs(x*y, (y, x), (1, 0))
+    assert first != second
+    assert first.doit() == second.doit() == 0
+    assert first.subs(1, oo).doit() == 0
+    assert second.subs(1, oo).doit() is nan
+
+
+@pytest.mark.parametrize('expr', [f(x)*y, 2*x + y, x*y, (x + y)**2])
+def test_Subs_ordered_programs(expr):
+    first = Subs(expr, (x, y), (0, 1))
+    second = Subs(expr, (y, x), (1, 0))
+    renamed = Subs(expr.xreplace({x: t, y: z}), (t, z), (0, 1))
+    assert len({first, second, renamed}) == 3
+    assert first.doit() == second.doit() == renamed.doit()
+
+
+def test_Subs_identity_cache_history():
+    function = Function('subs_cache_history')
+    function.__doc__ = 'An uninterpreted function.'
+    first = Subs(function(x, y), (x, y), (0, 1))
+    first_hash = hash(first)
+    clear_cache()
+    second = Subs(function(x, y), (x, y), (0, 1))
+    assert first == second
+    assert first_hash == hash(second)
+
+
+def test_Subs_derivative_reordering_progress():
+    first, second = Dummy('first'), Dummy('second')
+    source = Subs(Derivative(f(first, second, g(x, y)), first, second),
+                  (first, second), (x, y))
+    result = source.doit()
+    assert result.args == source.args
+    assert result.doit() == result
+
+
+def test_Subs_bound_placeholder_identity():
+    variable = Symbol('_1')
+    first = Subs(f(variable, x), (variable, x), (1, 0))
+    second = Subs(f(x, variable), (variable, x), (1, 0))
+    assert first != second
+    assert first.doit() == f(1, 0)
+    assert second.doit() == f(0, 1)
+    first = Subs(f(x), (x, y, variable), (0, 1, 0))
+    second = Subs(f(x), (variable, x, y), (0, 1, 1))
+    assert first != second
+    assert first.doit() == f(0)
+    assert second.doit() == f(1)
+
+
+@pytest.mark.parametrize('variable', [
+    Symbol('r', real=True), Symbol('p', positive=True), Symbol('n', negative=True),
+])
+def test_Subs_formal_derivative_domains(variable):
+    dummy = Dummy()
+    first = Subs(Derivative(f(variable), (variable, 2)), variable, z**2 + 1)
+    second = Subs(Derivative(f(dummy), (dummy, 2)), dummy, z**2 + 1)
+    assert first != second
+
+
+def test_Subs_derivative_domains_after_function_definition():
+    positive, negative = Symbol('p', positive=True), Symbol('n', negative=True)
+    first = Subs(Derivative(f(positive), positive), positive, 0)
+    second = Subs(Derivative(f(negative), negative), negative, 0)
+    assert first != second
+    definition = Lambda(t, Abs(t, evaluate=False))
+    assert first.subs(f, definition).doit() == 1
+    assert second.subs(f, definition).doit() == -1
+
+
+@pytest.mark.parametrize('other', [Symbol('n', negative=True), x])
+def test_Subs_variable_assumptions(other):
+    positive = Symbol('p', positive=True)
+    first = Subs(sign(positive, evaluate=False), positive, 0)
+    second = Subs(sign(other, evaluate=False), other, 0)
+    assert first != second
+    assert first.doit() == 1
+    assert second.doit() == (-1 if other.is_negative else 0)
+    assert (first + second).doit() == first.doit() + second.doit()
+
+
+@pytest.mark.parametrize('variable, point, expected', [
+    (Add(x, -x, evaluate=False), 1, f(0)),
+    (Pow(x, 0, evaluate=False), 0, f(1)),
+    (Pow(2, 10, evaluate=False), 0, f(1024)),
+])
+def test_Subs_held_compound_target(variable, point, expected):
+    first = Subs(f(variable), variable, point)
+    second = Subs(f(y), y, point)
+    assert first != second
+    assert first.doit() == expected
+    assert second.doit() == f(point)
 
 
 @pytest.mark.parametrize('point, other_point', [
