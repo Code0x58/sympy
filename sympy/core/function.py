@@ -35,6 +35,7 @@ from __future__ import annotations
 from typing import Any
 from collections.abc import Iterable
 import copyreg
+import os
 from decimal import Decimal
 from fractions import Fraction
 from itertools import count as _count
@@ -971,6 +972,19 @@ class _ComparisonKey:
 _comparison_keys = WeakValueDictionary()
 _comparison_key_indices = _count()
 _comparison_key_lock = RLock()
+
+
+def _reset_comparison_key_lock():
+    global _comparison_key_lock
+    # Preserve a surviving owner's lock and its recursion depth.
+    if _comparison_key_lock.acquire(blocking=False):
+        _comparison_key_lock.release()
+    else:
+        _comparison_key_lock = RLock()
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_reset_comparison_key_lock)
 
 
 def _get_comparison_key(value):

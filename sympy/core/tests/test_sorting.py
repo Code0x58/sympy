@@ -1,15 +1,18 @@
 from __future__ import annotations
 import pytest
 import gc
+import os
 from decimal import Decimal
 from fractions import Fraction
 from functools import partial
 from pickle import dumps, loads
+from threading import Event, Thread
 from weakref import ref
+import sympy.core.function as function_module
 from sympy.core.basic import Basic
 from sympy.core.containers import Tuple
 from sympy.core.cache import clear_cache
-from sympy.core.function import Function
+from sympy.core.function import Function, Subs
 from sympy.core.numbers import Float
 from sympy.core.sorting import default_sort_key, ordered
 from sympy.core.symbol import Symbol
@@ -17,6 +20,9 @@ from sympy.functions.elementary.trigonometric import cos, sin
 from sympy.testing.pytest import raises
 
 from sympy.abc import x
+
+if hasattr(os, 'fork'):
+    from multiprocessing import get_context
 
 
 def test_default_sort_key():
@@ -121,6 +127,55 @@ def test_metadata_sort_key_reconstruction():
     assert saved_key == default_sort_key(rebuilt)
     assert saved_key < other_key
     assert default_sort_key(rebuilt) < other_key
+
+
+@pytest.mark.skipif(not hasattr(os, 'fork'), reason='requires fork')
+@pytest.mark.thread_unsafe(reason='forks while another thread holds a lock')
+@pytest.mark.filterwarnings('ignore:This process .* is multi-threaded, use of fork.*:DeprecationWarning')
+def test_metadata_comparison_after_fork():
+    value = Symbol('fork_key_value')
+    first = Function('a', value=value)
+    other_key = default_sort_key(Function('a', value=Symbol('other_fork_key_value')))
+    saved_key = default_sort_key(first)
+    acquired, release = Event(), Event()
+
+    def hold_lock():
+        with function_module._comparison_key_lock:
+            acquired.set()
+            release.wait()
+
+    def construct():
+        clear_cache()
+        rebuilt = Function('a', value=value)
+        key = default_sort_key(rebuilt)
+        assert first == rebuilt
+        assert key == saved_key
+        assert (key < other_key) == (saved_key < other_key)
+        assert hash(Subs(x, x, 0)) == hash(Subs(Symbol('y'), Symbol('y'), 0))
+
+    thread = Thread(target=hold_lock, daemon=True)
+    process = get_context('fork').Process(target=construct)
+    thread.start()
+    try:
+        assert acquired.wait(5)
+        process.start()
+    finally:
+        release.set()
+        thread.join(5)
+    try:
+        process.join(5)
+        assert process.exitcode == 0
+    finally:
+        if process.is_alive():
+            process.kill()
+            process.join(5)
+
+
+def test_metadata_comparison_lock_owned_reset():
+    lock = function_module._comparison_key_lock
+    with lock, lock:
+        function_module._reset_comparison_key_lock()
+        assert function_module._comparison_key_lock is lock
 
 
 @pytest.mark.parametrize('value, equivalent', [
