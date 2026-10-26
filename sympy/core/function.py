@@ -2453,8 +2453,8 @@ class Subs(Expr):
 
     Sequences of replacements and compound targets retain their ordered
     arguments for comparison. Equal evaluated values alone do not make
-    substitution programs interchangeable. For derivatives, function
-    replacements precede expression replacements.
+    substitution programs interchangeable. When evaluating derivatives,
+    function replacements precede expression replacements.
 
     Point identity includes assumptions and function metadata. Targets with
     assumptions, noncommutative points, and ambiguous internal labels also
@@ -2655,15 +2655,6 @@ class Subs(Expr):
         key = (Tuple(normalized, *(Tuple(*vp) for vp in ordered(unused))),
                _get_comparison_key(frozenset(point)))
 
-        # Class targets are not expression instances; retain their bindings.
-        if any(isinstance(v, type) for v in variables):
-            if isinstance(self.expr, Derivative):
-                # Subs.doit applies function replacements first for derivatives.
-                functions, expressions = sift(zip(variables, point),
-                    lambda vp: isinstance(vp[0], FunctionClass), binary=True)
-                variables, point = zip(*(functions + expressions))
-                return key + (self.expr, Tuple(*variables), Tuple(*point))
-            return key + super()._hashable_content()
         # Normalize only one ordinary symbol: order and assumptions can become
         # significant after further function or point replacements.
         if (len(variables) != 1 or type(variables[0]) not in (Symbol, Dummy)

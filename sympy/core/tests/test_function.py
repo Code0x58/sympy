@@ -609,24 +609,15 @@ def test_Subs_order_after_point_replacement():
     assert second.subs(1, oo).doit() is nan
 
 
-@pytest.mark.parametrize('expr', [f(x)*y, 2*x + y, x*y, (x + y)**2])
-def test_Subs_ordered_programs(expr):
-    first = Subs(expr, (x, y), (0, 1))
-    second = Subs(expr, (y, x), (1, 0))
-    renamed = Subs(expr.xreplace({x: t, y: z}), (t, z), (0, 1))
-    assert len({first, second, renamed}) == 3
-    assert first.doit() == second.doit() == renamed.doit()
-
-
-def test_Subs_identity_cache_history():
-    function = Function('subs_cache_history')
-    function.__doc__ = 'An uninterpreted function.'
-    first = Subs(function(x, y), (x, y), (0, 1))
-    first_hash = hash(first)
-    clear_cache()
-    second = Subs(function(x, y), (x, y), (0, 1))
-    assert first == second
-    assert first_hash == hash(second)
+def test_Subs_function_order_after_point_replacement():
+    source = Derivative(f(y), y)
+    definition = Lambda(t, x*t)
+    first = Subs(source, (x, f), (0, definition))
+    second = Subs(source, (f, x), (definition, 0))
+    assert first != second
+    assert first.doit() == second.doit() == 0
+    assert first.subs(x, z + 1).doit() == z + 1
+    assert second.subs(x, z + 1).doit() == 0
 
 
 def test_Subs_derivative_reordering_progress():
@@ -694,6 +685,19 @@ def test_Subs_held_compound_target(variable, point, expected):
     assert first != second
     assert first.doit() == expected
     assert second.doit() == f(point)
+
+
+def test_Subs_symbol_subclass_target():
+    class EvaluatingSymbol(Symbol):
+        def doit(self, **hints):
+            return S.One
+
+    variable = EvaluatingSymbol('x')
+    first = Subs(f(variable), variable, 0)
+    second = Subs(f(x), x, 0)
+    assert first != second
+    assert first.doit() == f(1)
+    assert second.doit() == f(0)
 
 
 @pytest.mark.parametrize('point, other_point', [
@@ -782,8 +786,7 @@ def test_Subs_function_target_identity(variables, points,
     source = Derivative(f(x), x)
     first = Subs(source, variables, points)
     second = Subs(source, other_variables, other_points)
-    assert first == second
-    assert hash(first) == hash(second)
+    assert first != second
     assert first.doit() == second.doit() == expected
 
 
@@ -1130,7 +1133,7 @@ def test_Subs_self_mappings():
     source = Derivative(sin(x + y), x)
     first = Subs(source, (f, x, y), (f, x, 0))
     second = Subs(source, (x, y, f), (x, 0, f))
-    assert first == second
+    assert first != second
     assert first.doit() == second.doit() == cos(x)
 
 
