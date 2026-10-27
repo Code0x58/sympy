@@ -60,7 +60,7 @@ from .singleton import S
 from .sympify import sympify, _sympify
 from .traversal import iterargs
 
-from .sorting import ordered
+from .sorting import default_sort_key, ordered
 from sympy.utilities.exceptions import (sympy_deprecation_warning,
                                         SymPyDeprecationWarning, ignore_warnings)
 from sympy.utilities.iterables import (has_dups, sift, iterable,
@@ -2651,6 +2651,11 @@ class Subs(Expr):
 
     def _hashable_content(self):
         return self._comparison_key
+
+    @cacheit
+    def sort_key(self, order=None):
+        key = default_sort_key(self._comparison_key, order=order)
+        return self.class_key(), key[1], key[2], key[3]
 
     @cached_property
     def _comparison_key(self):

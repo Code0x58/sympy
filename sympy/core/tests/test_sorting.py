@@ -61,6 +61,29 @@ def test_class_sort_keys():
     assert first_key == default_sort_key(second)
 
 
+@pytest.mark.parametrize('order', [None, 'lex', 'grlex', 'grevlex', 'rev-lex'])
+@pytest.mark.parametrize('wrap', [lambda value: value, Tuple,
+    lambda value: Function('sort_key_parent')(value)])
+def test_equal_subs_sort_keys(order, wrap):
+    y, z = Symbol('y'), Symbol('z')
+    f = Function('f')
+    first = wrap(Subs(f(x), x, 0))
+    clear_cache()
+    first_key = default_sort_key(first, order=order)
+    clear_cache()
+    second = wrap(Subs(f(z), z, 0))
+    second_key = default_sort_key(second, order=order)
+    assert first == second
+    assert first_key == second_key
+
+    other = wrap(Subs(f(y), y, 1))
+    clear_cache()
+    left = sorted([first, other], key=lambda value: default_sort_key(value, order))
+    clear_cache()
+    right = sorted([second, other], key=lambda value: default_sort_key(value, order))
+    assert left == right
+
+
 def test_equal_numeric_metadata_sort_keys():
     first = Function('a', value=2)
     second = Function('a', value=Fraction(2))
