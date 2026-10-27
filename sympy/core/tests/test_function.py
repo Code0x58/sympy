@@ -1285,6 +1285,7 @@ def test_Subs_function_replacement_cache():
 
 
 def test_Subs_pattern_scope_cache():
+    clear_cache()
     first, second = Subs(f(x), x, 0), Subs(f(z), z, 0)
     source = Subs(x + g(second), x, 0)
     assert first == second
