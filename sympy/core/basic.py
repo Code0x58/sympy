@@ -748,7 +748,8 @@ class Basic(Printable):
         True
         """
         empty: set[Basic] = set()
-        return empty.union(*(a.free_symbols for a in self.args))
+        return empty.union(*(a.free_symbols for a in self.args
+                             if not isinstance(a, type)))
 
     @property
     def expr_free_symbols(self):
@@ -2260,7 +2261,7 @@ class Basic(Printable):
     def _rewrite(self, pattern, rule, method, **hints):
         deep = hints.pop('deep', True)
         if deep:
-            args = [a._rewrite(pattern, rule, method, **hints)
+            args = [a if isinstance(a, type) else a._rewrite(pattern, rule, method, **hints)
                     for a in self.args]
         else:
             args = self.args

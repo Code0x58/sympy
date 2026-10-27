@@ -126,6 +126,33 @@ def test_subs_class_arguments():
         assert not source.has(y)
 
 
+def test_free_symbols_class_arguments():
+    x, y = symbols('x y')
+    function = Function('f')
+    for cls in (function, Symbol, int):
+        source = Basic(cls, x + y)
+        assert source.free_symbols == {x, y}
+    for cls in (function, Symbol):
+        bound = Lambda(x, Tuple(cls, x, y))
+        assert bound.free_symbols == {y}
+        assert bound.as_dummy().free_symbols == {y}
+
+    class Value:
+        free_symbols = {y}
+
+    assert Basic(Value(), x).free_symbols == {x, y}
+
+
+def test_rewrite_class_arguments():
+    x = Symbol('x')
+    for cls in (Function('f'), Symbol, int):
+        source = Basic(cls, sin(x))
+        expected = Basic(cls, sin(x).rewrite(exp))
+        assert source.rewrite(exp) == expected
+        assert source.rewrite(sin, exp) == expected
+        assert source.rewrite(exp, deep=False) == source
+
+
 def test_equality():
     instances = [b1, b2, b3, b21, Basic(b1, b1, b1), Basic]
     for i, b_i in enumerate(instances):

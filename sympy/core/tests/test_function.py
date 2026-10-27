@@ -895,6 +895,17 @@ def test_Subs_class_arguments_substitution():
     assert source.subs(y, z) == Subs(f(x) + z, (Symbol, f), (1, sin))
 
 
+def test_Subs_class_points():
+    for point in (f, Symbol):
+        source = Subs(Tuple(x), x, point)
+        assert source.free_symbols == set()
+        assert source.doit() == Tuple(point)
+        assert source.rewrite(exp) == source
+
+    source = Subs(sin(x), f, cos)
+    assert source.rewrite(exp) == Subs(sin(x).rewrite(exp), f, cos)
+
+
 @pytest.mark.parametrize('value, equivalent', [
     (2, Fraction(2)),
     (Fraction(1, 10), Rational(1, 10)),
