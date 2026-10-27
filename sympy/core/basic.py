@@ -748,8 +748,8 @@ class Basic(Printable):
         True
         """
         empty: set[Basic] = set()
-        return empty.union(*(a.free_symbols for a in self.args
-                             if not isinstance(a, type)))
+        return empty.union(*[a.free_symbols for a in self.args
+                             if not isinstance(a, type)])
 
     @property
     def expr_free_symbols(self):
