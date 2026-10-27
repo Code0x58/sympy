@@ -1284,6 +1284,30 @@ def test_Subs_function_replacement_cache():
             assert source.subs(f(x), z).doit() == f(y)
 
 
+def test_Subs_pattern_scope_cache():
+    first, second = Subs(f(x), x, 0), Subs(f(z), z, 0)
+    source = Subs(x + g(second), x, 0)
+    assert first == second
+    for pattern in (first, second):
+        clear_cache()
+        pattern.has(x)
+        assert source.subs(second, 1).doit() == g(1)
+
+
+def test_Subs_hash_structural_cache():
+    first, second = Tuple(Subs(f(x), x, 0)), Tuple(Subs(f(z), z, 0))
+    assert first == second
+    source = Subs(first, x, 1)
+    other = source.func(*source.args)
+    clear_cache()
+    assert not second.has(x)
+    source_hash = hash(source)
+    clear_cache()
+    assert first.has(x)
+    assert hash(other) == source_hash
+    assert source == other
+
+
 @pytest.mark.parametrize('source, old, new, expected', [
     (Subs(x + y, x, 0), y, x, x),
     (Subs(x + 4*y, x, 0), 2*y, x, 2*x),

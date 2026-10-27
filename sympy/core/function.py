@@ -57,6 +57,7 @@ from .parameters import global_parameters, evaluate, distribute, _exp_is_pow
 from .rules import Transform
 from .singleton import S
 from .sympify import sympify, _sympify
+from .traversal import iterargs
 
 from .sorting import default_sort_key, ordered
 from sympy.utilities.exceptions import (sympy_deprecation_warning,
@@ -2560,7 +2561,7 @@ class Subs(Expr):
         e, v, p = self.args
 
         # remove self mappings
-        replacements = [(v[i], p[i]) for i in self._ordered_indices() if v[i] != p[i]]
+        replacements = [(vi, pi) for vi, pi in zip(v, p) if vi != pi]
         if not replacements:
             if hints.get('deep', True) and isinstance(e, Basic):
                 return e.doit(**hints)
@@ -2583,7 +2584,7 @@ class Subs(Expr):
                 arg = e.args[0]
                 for vi, pi in undone:
                     if (D not in e.xreplace({vi: D}).free_symbols and
-                            arg.has(vi)):
+                            arg._has(iterargs, vi)):
                         e = e.subs(vi, pi)
                     else:
                         undone2.append((vi, pi))
@@ -2675,8 +2676,9 @@ class Subs(Expr):
         point = self.point.args
         normalized = self._xreplace_for_comparison(
             self._expr, self.canonical_variables)
+        # has() caching can hide different bound names in equal Subs objects.
         unused = [(v, p) for v, p in zip(variables, point)
-                  if not self.expr.has(v)]
+                  if not self.expr._has(iterargs, v)]
         # Printed point names do not encode assumptions or class identity.
         key = (Tuple(normalized, *(Tuple(*vp) for vp in ordered(unused))),
                _get_comparison_key(frozenset(point)))
@@ -2692,10 +2694,6 @@ class Subs(Expr):
         return key
 
     def _eval_subs(self, old, new):
-        # Subs doit will do the variables in order; the semantics
-        # of subs for Subs is have the following invariant for
-        # Subs object foo:
-        #    foo.doit().subs(reps) == foo.subs(reps).doit()
         def subs(arg):
             if isinstance(arg, type):
                 return new if arg == old else arg
@@ -2707,7 +2705,7 @@ class Subs(Expr):
             if (type(old) in (Symbol, Dummy) and type(new) in (Symbol, Dummy)
                     and old.assumptions0 == new.assumptions0
                     and old not in self.free_symbols
-                    and not any(i.has(new) for i in self.args)):
+                    and not any(i._has(iterargs, new) for i in self.args)):
                 return self.xreplace({old: new})
             # any occurrence of old before this point will get
             # handled by replacements from here on
@@ -2723,10 +2721,10 @@ class Subs(Expr):
                     and v[0] in self.expr.free_symbols else None)
         # Keep bound names out of patterns and replacement expressions.
         if (variable is not None and not isinstance(old, type)
-                and old.has(variable)):
+                and old._has(iterargs, variable)):
             expr = self.expr
         elif (variable is not None and not isinstance(new, type)
-                and new.has(variable, Dummy)):
+                and new._has(iterargs, variable, Dummy)):
             # Dummies can carry deferred simultaneous replacements.
             dummy = Dummy(variable.name, **variable.assumptions0)
             with evaluate(False):
