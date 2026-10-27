@@ -132,8 +132,9 @@ def test_series_of_Subs():
     assert subs1.series() == subs1_series
     assert subs1.series(y) == subs1_series
     assert subs1.series(z) == subs1
-    assert subs2.series(z) == (Subs(z**4*sin(x)/24, x, y) +
+    expected = (Subs(z**4*sin(x)/24, x, y) +
         Subs(-z**2*sin(x)/2, x, y) + Subs(sin(x), x, y) + O(z**6))
+    assert subs2.series(z).doit() == expected.doit()
     assert subs3.series(x).doit() == subs3.doit().series(x)
     assert subs3.series(z).doit() == sin(x*y)
 

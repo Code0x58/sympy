@@ -43,7 +43,8 @@ from threading import RLock
 from weakref import ref, WeakValueDictionary
 
 from .add import Add
-from .basic import Basic, _atomic
+from .assumptions import _assume_defined
+from .basic import Atom, Basic, _atomic
 from .cache import cacheit, cached_property
 from .containers import Tuple, Dict
 from .decorators import _sympifyit
@@ -59,11 +60,11 @@ from .singleton import S
 from .sympify import sympify, _sympify
 from .traversal import iterargs
 
-from .sorting import default_sort_key, ordered
+from .sorting import ordered
 from sympy.utilities.exceptions import (sympy_deprecation_warning,
                                         SymPyDeprecationWarning, ignore_warnings)
 from sympy.utilities.iterables import (has_dups, sift, iterable,
-    is_sequence, uniq, topological_sort)
+    is_sequence, uniq, topological_sort, numbered_symbols)
 from sympy.utilities.lambdify import MPMATH_TRANSLATIONS
 from sympy.utilities.misc import as_int, filldedent, func_name
 
@@ -1117,6 +1118,23 @@ class UndefinedFunction(FunctionClass):
     @property
     def _diff_wrt(self):
         return False
+
+
+def _is_uninterpreted_function(cls):
+    """Recognize functions without user-supplied evaluation behavior."""
+    if type(cls) is UndefinedFunction:
+        return (cls.__bases__ == (AppliedUndef,)
+                and not (cls._kwargs.keys() - _assume_defined - {'nargs'}))
+    if type(cls) is not FunctionClass or not issubclass(cls, Function):
+        return False
+    for base in cls.__mro__:
+        if base is Function:
+            return True
+        if any(callable(value) or hasattr(value, '__get__')
+               for name, value in base.__dict__.items()
+               if name not in ('__dict__', '__weakref__')):
+            return False
+    return False
 
 
 # Using copyreg is the only way to make a dynamically generated instance of a
@@ -2467,7 +2485,7 @@ class Subs(Expr):
     function replacements precede expression replacements.
 
     Point identity includes assumptions and function metadata. Targets with
-    assumptions, noncommutative points, and ambiguous internal labels also
+    assumptions, noncommutative points, and expressions with evaluators also
     retain the original arguments.
     """
     def __new__(cls, expr, variables, point, **assumptions):
@@ -2499,38 +2517,7 @@ class Subs(Expr):
         else:
             expr = sympify(expr)
 
-        # use symbols with names equal to the point value (with prepended _)
-        # to give a variable-independent expression
-        pre = "_"
-        pts = sorted(set(point), key=default_sort_key)
-        free = expr.free_symbols
-        from sympy.printing.str import StrPrinter
-        class CustomStrPrinter(StrPrinter):
-            def _print_Dummy(self, expr):
-                return str(expr) + str(expr.dummy_index)
-        point_str = CustomStrPrinter(CustomStrPrinter._default_settings).doprint
-        while 1:
-            s_pts = {p: Symbol(pre + point_str(p)) for p in pts}
-            reps = [(v, s_pts[p])
-                for v, p in zip(variables, point)]
-            # if any underscore-prepended symbol is already a free symbol
-            # and is a variable with a different point value, then there
-            # is a clash, e.g. _0 clashes in Subs(_0 + _1, (_0, _1), (1, 0))
-            # because the new symbol that would be created is _1 but _1
-            # is already mapped to 0 so __0 and __1 are used for the new
-            # symbols
-            if any(r in free and
-                   r in variables and
-                   Symbol(pre + point_str(point[variables.index(r)])) != r
-                   for _, r in reps):
-                pre += "_"
-                continue
-            break
-
-        obj = Expr.__new__(cls, expr, Tuple(*variables), point)
-        obj._normalization_symbol = reps[0][1]
-        obj._expr = cls._xreplace_for_comparison(expr, dict(reps))
-        return obj
+        return Expr.__new__(cls, expr, Tuple(*variables), point)
 
     @staticmethod
     def _xreplace_for_comparison(expr, rule):
@@ -2667,34 +2654,46 @@ class Subs(Expr):
 
     @cached_property
     def _comparison_key(self):
-        """Refine normalized identity with point identity and ordered arguments."""
+        """Retain literal arguments unless a single binding can be renamed."""
+        from .power import Pow
+        from sympy.integrals.integrals import Integral
         variables = self.variables.args
         point = self.point.args
-        canonical_variables = self.canonical_variables
-        normalized = self._xreplace_for_comparison(
-            self._expr, canonical_variables)
-        # has() caching can hide different bound names in equal Subs objects.
-        unused = [(v, p) for v, p in zip(variables, point)
-                  if not self.expr._has(iterargs, v)]
-        # Printed point names do not encode assumptions or class identity.
-        key = (Tuple(normalized, *(Tuple(*vp) for vp in ordered(unused))),
-               _get_comparison_key(frozenset(point)))
+        # False preserves literal arguments; True marks a normalized binding.
+        key = (False,) + super()._hashable_content()
 
         # Normalize one active ordinary symbol only when renaming is reversible.
-        # Order, assumptions and nested scopes can matter after replacements.
+        # Order, assumptions, nested scopes and evaluators can matter.
         if (len(variables) != 1 or type(variables[0]) not in (Symbol, Dummy)
                 or variables[0].assumptions0 != {'commutative': True}
-                or variables[0] not in self.expr.free_symbols
-                or getattr(point[0], 'is_commutative', None) is not True
-                or any(getattr(node, 'bound_symbols', ()) for node in iterargs(self.expr)
-                       if not isinstance(node, type))):
-            return key + super()._hashable_content()
+                or getattr(point[0], 'is_commutative', None) is not True):
+            return key
+        free = self.expr.free_symbols
+        if variables[0] not in free:
+            return key
+        for node in iterargs(self.expr):
+            if isinstance(node, type):
+                continue
+            if getattr(node, 'bound_symbols', ()):
+                return key
+            if isinstance(node, Function):
+                if not _is_uninterpreted_function(node.func):
+                    return key
+            elif isinstance(node, Atom):
+                if node.args or type(node).doit is not Atom.doit:
+                    return key
+            elif type(node) not in (Basic, Expr, Add, Mul, Pow, Derivative,
+                                   Tuple, Dict, Integral):
+                return key
+
+        normalization_symbol = next(numbered_symbols('_', exclude=free - set(variables)))
+        normalized = self._xreplace_for_comparison(
+            self.expr, {variables[0]: normalization_symbol})
+        if normalized.free_symbols != free - set(variables) | {normalization_symbol}:
+            return key
 
         # Compare content without running constructors; only commutative
         # operand order is irrelevant to the structure.
-        normalization_symbol = canonical_variables.get(
-            self._normalization_symbol, self._normalization_symbol)
-
         def structure(node, restore=False):
             if restore and isinstance(node, Symbol) and node == normalization_symbol:
                 node = variables[0]
@@ -2715,8 +2714,8 @@ class Subs(Expr):
             return type(node), content
 
         if structure(self.expr) != structure(normalized, restore=True):
-            return key + super()._hashable_content()
-        return key
+            return key
+        return True, normalized, self.point
 
     def _eval_subs(self, old, new):
         def subs(arg):
@@ -2749,7 +2748,9 @@ class Subs(Expr):
             expr = self.expr
         elif (variable is not None and (
                 not isinstance(old, type) and old._has(iterargs, variable)
-                or not isinstance(new, type) and new._has(iterargs, variable, Dummy))):
+                or not isinstance(new, type) and new._has(iterargs, variable, Dummy)
+                or isinstance(old, FunctionClass) and callable(new)
+                and not _is_uninterpreted_function(new) and self._comparison_key[0])):
             # Keep nested bindings intact while masking this bound name.
             # Dummies can carry deferred simultaneous replacements.
             dummy = Dummy(variable.name, **variable.assumptions0)

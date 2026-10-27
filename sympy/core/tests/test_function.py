@@ -12,7 +12,7 @@ from sympy.core.add import Add
 from sympy.core.basic import Basic, _aresame
 from sympy.core.cache import clear_cache
 from sympy.core.containers import Dict, Tuple
-from sympy.core.expr import Expr, unchanged
+from sympy.core.expr import AtomicExpr, Expr, unchanged
 from sympy.core.function import (Subs, Function, diff, Lambda, expand,
     nfloat, Derivative, UndefinedFunction)
 from sympy.core.mul import Mul
@@ -1563,19 +1563,103 @@ def test_Subs_normalization_preserves_held_function():
     assert hash(source) == hash(source.func(*source.args))
 
 
-@XFAIL
-def test_Subs_held_symbol_sensitive_function_identity():
-    class F(Function):
-        @classmethod
-        def eval(cls, arg):
+@pytest.mark.parametrize('metadata', [False, True])
+@pytest.mark.parametrize('method', ['eval', 'doit'])
+def test_Subs_held_symbol_sensitive_function_identity(metadata, method):
+    if method == 'eval':
+        def evaluate(cls, arg):
             if arg == x:
                 return S.Zero
+        handler = classmethod(evaluate)
+    else:
+        def doit(self, **hints):
+            if self.args == (x,):
+                return S.Zero
+            return Basic.doit(self, **hints)
+        handler = doit
+
+    namespace = {method: handler}
+    F = Function('F', **namespace) if metadata else type('F', (Function,), namespace)
 
     first = Subs(F(x, evaluate=False), x, 1)
     second = Subs(F(z), z, 1)
     assert first.doit() == 0
     assert second.doit() == F(1)
     assert first != second
+    assert (first - second).doit() == -F(1)
+
+
+def test_Subs_identity_does_not_evaluate_labels():
+    class F(Function):
+        @classmethod
+        def eval(cls, arg):
+            if isinstance(arg, Symbol) and arg.name.startswith('_'):
+                raise ValueError('internal label')
+
+    source = Subs(F(x), x, 2)
+    assert source == source.func(*source.args)
+    assert hash(source) == hash(source.func(*source.args))
+    assert source.doit() == F(2)
+
+
+@pytest.mark.parametrize('method', ['constructor', 'doit'])
+def test_Subs_symbol_sensitive_expression_identity(method):
+    if method == 'constructor':
+        class E(Expr):
+            def __new__(cls, arg, evaluate=True):
+                if evaluate and arg == x:
+                    return S.Zero
+                return Expr.__new__(cls, arg)
+    else:
+        class E(Expr):
+            def doit(self, **hints):
+                if self.args == (x,):
+                    return S.Zero
+                return self
+
+    first = Subs(E(x, evaluate=False) if method == 'constructor' else E(x), x, 1)
+    second = Subs(E(z), z, 1)
+    assert first != second
+    assert first.doit() == 0
+    assert second.doit() == E(S.One)
+
+
+def test_Subs_evaluating_atom_identity():
+    class E(AtomicExpr):
+        def doit(self, **hints):
+            return x
+
+    first = Subs(f(x) + E(), x, 0)
+    second = Subs(f(z) + E(), z, 0)
+    assert first != second
+    assert first.doit() == f(0)
+    assert second.doit() == f(0) + x
+
+
+@pytest.mark.parametrize('definition', ['class', 'lambda'])
+def test_Subs_symbol_sensitive_function_definition(definition):
+    class F(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == x:
+                return S.Zero
+
+    replacement = F if definition == 'class' else Lambda(t, F(t))
+    for variable in (x, z):
+        source = Subs(f(variable), variable, 1)
+        assert source.subs(f, replacement).doit() == F(1)
+
+
+@pytest.mark.parametrize('variable', [Symbol('_0'), Symbol('_1'), Symbol('_2')])
+@pytest.mark.parametrize('point', [0, 1, Symbol('_0'), x])
+def test_Subs_reserved_binding_names(variable, point):
+    first = Subs(f(variable), variable, point)
+    second = Subs(f(z), z, point)
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first.doit() == second.doit() == f(point)
+    for source in (first, second):
+        assert source.subs(f, Lambda(t, x*t)).doit() == x*point
 
 
 def test_Subs_normalization_operand_order():
