@@ -1532,18 +1532,23 @@ def test_Subs_held_expression_identity():
     assert second.doit(deep=False) == f(0) + 1
 
 
-def test_Subs_normalization_evaluates_function():
+@pytest.mark.parametrize('variable, point, label', [
+    (x, 2, Symbol('_2')),
+    (Symbol('_1'), 1, Symbol('_0')),
+])
+def test_Subs_normalization_evaluates_function(variable, point, label):
     class F(Function):
         @classmethod
         def eval(cls, arg):
-            if arg == Symbol('_2'):
+            if arg == label:
                 return S.Zero
 
-    first = Subs(f(x) + F(x), x, 2)
-    second = Subs(f(x), x, 2)
+    first = Subs(f(variable) + F(variable), variable, point)
+    second = Subs(f(variable), variable, point)
     assert first != second
-    assert first.doit() == f(2) + F(2)
-    assert second.doit() == f(2)
+    assert first.doit() == f(point) + F(point)
+    assert second.doit() == f(point)
+    assert (first - second).doit() == F(point)
 
 
 def test_Subs_normalization_preserves_held_function():
@@ -1556,6 +1561,21 @@ def test_Subs_normalization_preserves_held_function():
     source = Subs(F(x, evaluate=False), x, 2)
     assert source == source.func(*source.args)
     assert hash(source) == hash(source.func(*source.args))
+
+
+@XFAIL
+def test_Subs_held_symbol_sensitive_function_identity():
+    class F(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == x:
+                return S.Zero
+
+    first = Subs(F(x, evaluate=False), x, 1)
+    second = Subs(F(z), z, 1)
+    assert first.doit() == 0
+    assert second.doit() == F(1)
+    assert first != second
 
 
 def test_Subs_normalization_operand_order():

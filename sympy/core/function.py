@@ -2670,8 +2670,9 @@ class Subs(Expr):
         """Refine normalized identity with point identity and ordered arguments."""
         variables = self.variables.args
         point = self.point.args
+        canonical_variables = self.canonical_variables
         normalized = self._xreplace_for_comparison(
-            self._expr, self.canonical_variables)
+            self._expr, canonical_variables)
         # has() caching can hide different bound names in equal Subs objects.
         unused = [(v, p) for v, p in zip(variables, point)
                   if not self.expr._has(iterargs, v)]
@@ -2691,8 +2692,11 @@ class Subs(Expr):
 
         # Compare content without running constructors; only commutative
         # operand order is irrelevant to the structure.
+        normalization_symbol = canonical_variables.get(
+            self._normalization_symbol, self._normalization_symbol)
+
         def structure(node, restore=False):
-            if restore and isinstance(node, Symbol) and node == self._normalization_symbol:
+            if restore and isinstance(node, Symbol) and node == normalization_symbol:
                 node = variables[0]
             if type(node) is tuple:
                 return tuple, tuple(structure(arg, restore) for arg in node)
@@ -2710,7 +2714,7 @@ class Subs(Expr):
                 content = frozenset(Counter(content).items())
             return type(node), content
 
-        if structure(self.expr) != structure(self._expr, restore=True):
+        if structure(self.expr) != structure(normalized, restore=True):
             return key + super()._hashable_content()
         return key
 
