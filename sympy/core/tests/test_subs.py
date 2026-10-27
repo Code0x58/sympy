@@ -816,8 +816,10 @@ def test_Subs_subs():
     assert Subs(x*y, x, x).subs(x, y) == Subs(x*y, x, y)
     assert Subs(x*y, x, x + 1).subs(x, y) == \
         Subs(x*y, x, y + 1)
-    assert Subs(x*y, y, x + 1).subs(x, y) == \
-        Subs(y**2, y, y + 1)
+    source = Subs(x*y, y, x + 1)
+    result = source.subs(x, y)
+    assert result == Subs(x*y, x, y + 1)
+    assert result.doit() == source.doit().subs(x, y) == y*(y + 1)
     a = Subs(x*y*z, (y, x, z), (x + 1, x + z, x))
     b = Subs(x*y*z, (y, x, z), (x + 1, y + z, y))
     assert a.subs(x, y) == b and \

@@ -2681,10 +2681,11 @@ class Subs(Expr):
         key = (Tuple(normalized, *(Tuple(*vp) for vp in ordered(unused))),
                _get_comparison_key(frozenset(point)))
 
-        # Normalize only one ordinary symbol: order and assumptions can become
-        # significant after further function or point replacements.
+        # Normalize only one active ordinary symbol; order and assumptions can
+        # become significant after further function or point replacements.
         if (len(variables) != 1 or type(variables[0]) not in (Symbol, Dummy)
                 or variables[0].assumptions0 != {'commutative': True}
+                or variables[0] not in self.expr.free_symbols
                 or self._has_clashing_symbols
                 or getattr(point[0], 'is_commutative', None) is not True):
             return key + super()._hashable_content()
@@ -2718,7 +2719,25 @@ class Subs(Expr):
         v = [subs(i) for i in self.variables]
         if v != list(self.variables):
             return self.func(self.expr, self.variables + (old,), pt + [new])
-        expr = self.expr._subs(old, new)
+        variable = (v[0] if len(v) == 1 and type(v[0]) in (Symbol, Dummy)
+                    and v[0] in self.expr.free_symbols else None)
+        # Keep bound names out of patterns and replacement expressions.
+        if (variable is not None and not isinstance(old, type)
+                and old.has(variable)):
+            expr = self.expr
+        elif (variable is not None and not isinstance(new, type)
+                and new.has(variable, Dummy)):
+            # Dummies can carry deferred simultaneous replacements.
+            dummy = Dummy(variable.name, **variable.assumptions0)
+            with evaluate(False):
+                masked = self.expr.xreplace({variable: dummy})
+            expr = subs(masked)
+            if expr != masked:
+                v = [dummy]
+            else:
+                expr = self.expr
+        else:
+            expr = subs(self.expr)
         pt = [subs(i) for i in self.point]
         return self.func(expr, v, pt)
 

@@ -1246,6 +1246,103 @@ def test_Subs_ordered_free_symbols():
         assert canonical.doit() == source.doit()
 
 
+@pytest.mark.parametrize('variable', [x, z, Symbol('_0'), Dummy('bound')])
+@pytest.mark.parametrize('point', [S.Zero, y, x])
+def test_Subs_function_replacement_preserves_free_symbols(variable, point):
+    source = Subs(f(variable), variable, point)
+    result = source.subs(f, Lambda(t, x*t))
+    assert result.doit() == x*point
+    assert result.free_symbols == {x} | point.free_symbols
+
+
+@pytest.mark.parametrize('variable', [x, z, Symbol('p', positive=True)])
+@pytest.mark.parametrize('point', [S.Zero, y, x])
+def test_Subs_derivative_function_replacement_scope(variable, point):
+    source = Subs(Derivative(f(variable), variable), variable, point)
+    result = source.subs(f, Lambda(t, x*t + t**2))
+    assert result.doit() == x + 2*point
+
+
+def test_Subs_bound_expression_patterns():
+    for variable in (x, z):
+        source = Subs(f(variable), variable, y)
+        clear_cache()
+        assert source.subs(f(x), z).doit() == f(y)
+        source = Subs(variable**2, variable, 0)
+        clear_cache()
+        assert source.subs(x**2, z).doit() == 0
+    assert Subs(f(x), x, f(x)).subs(f(x), z).doit() == f(z)
+
+
+def test_Subs_function_replacement_cache():
+    first, second = Subs(f(x), x, y), Subs(f(z), z, y)
+    assert first == second
+    for sources in [(first, second), (second, first)]:
+        clear_cache()
+        for source in sources:
+            assert source.subs(f, Lambda(t, x*t)).doit() == x*y
+            assert source.subs(f(x), z).doit() == f(y)
+
+
+@pytest.mark.parametrize('source, old, new, expected', [
+    (Subs(x + y, x, 0), y, x, x),
+    (Subs(x + 4*y, x, 0), 2*y, x, 2*x),
+    (Subs(x + y, x, 0), x + y, z, y),
+])
+@pytest.mark.parametrize('simultaneous', [False, True])
+def test_Subs_expression_replacement_scope(source, old, new, expected, simultaneous):
+    assert source.subs(old, new, simultaneous=simultaneous).doit() == expected
+
+
+def test_Subs_capture_avoidance_preserves_assumptions():
+    positive = Symbol('p', positive=True)
+    source = Subs(sign(positive, evaluate=False)*f(positive), positive, y)
+    assert source.subs(f, Lambda(t, positive*t)).doit() == positive*y
+    source = Subs(positive + y, positive, 0)
+    assert source.subs(y, positive, simultaneous=True).doit() == positive
+
+
+def test_Subs_absent_replacement_preserves_binding():
+    for variable in (x, Symbol('p', positive=True)):
+        source = Subs(f(variable), variable, 0)
+        assert source.subs(y, variable).args == source.args
+
+
+def test_Subs_inactive_derivative_target_identity():
+    first = Subs(Derivative(y, x, evaluate=False), x, 1)
+    second = Subs(Derivative(y, z, evaluate=False), z, 1)
+    assert first != second
+    assert first.subs(y, x**2).doit() == 2
+    assert second.subs(y, x**2).doit() == 0
+
+
+def test_Subs_bound_derivative_pattern():
+    pattern = Derivative(y, x, evaluate=False)
+    for variable in (x, z):
+        source = Subs(variable + Derivative(y, variable, evaluate=False), variable, 1)
+        clear_cache()
+        assert source.subs(pattern, 2).doit() == 1
+
+
+def test_Subs_replacement_nested_binding():
+    replacement = Lambda(x, x**2)
+    for variable in (x, z):
+        source = Subs(f(variable) + y, variable, 0)
+        clear_cache()
+        assert source.subs(y, replacement).doit() == f(0) + replacement
+
+
+def test_Subs_scope_mask_preserves_held_expression():
+    class EvaluatingFunction(Function):
+        @classmethod
+        def eval(cls, arg):
+            if isinstance(arg, Dummy):
+                return S.One
+
+    source = Subs(EvaluatingFunction(x), x, 0)
+    assert source.subs(y, x).args == source.args
+
+
 def test_Subs_renaming_assumptions():
     positive = Symbol('p', positive=True)
     for old, new in [(x, positive), (positive, x)]:
