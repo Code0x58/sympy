@@ -2547,13 +2547,24 @@ class Subs(Expr):
     def _eval_is_commutative(self):
         return self.expr.is_commutative
 
+    def _ordered_indices(self):
+        """Use the evaluator's function-first order for derivatives."""
+        indices = range(len(self.variables))
+        if isinstance(self.expr, Derivative):
+            functions, expressions = sift(indices,
+                lambda i: isinstance(self.variables[i], FunctionClass), binary=True)
+            return functions + expressions
+        return indices
+
     def doit(self, **hints):
         e, v, p = self.args
 
         # remove self mappings
-        replacements = [(vi, pi) for vi, pi in zip(v, p) if vi != pi]
+        replacements = [(v[i], p[i]) for i in self._ordered_indices() if v[i] != p[i]]
         if not replacements:
-            return self.expr
+            if hints.get('deep', True) and isinstance(e, Basic):
+                return e.doit(**hints)
+            return e
 
         if isinstance(e, Derivative):
             # apply functions first, e.g. f -> cos
@@ -2632,8 +2643,14 @@ class Subs(Expr):
 
     @property
     def free_symbols(self):
-        return (self.expr.free_symbols - set(self.variables) |
-            set(self.point.free_symbols))
+        free = set(self.expr.free_symbols)
+        # Later targets can bind symbols introduced by earlier points.
+        for i in self._ordered_indices():
+            variable, point = self.variables[i], self.point[i]
+            free.discard(variable)
+            if not isinstance(point, type):
+                free.update(point.free_symbols)
+        return free
 
     @property
     def expr_free_symbols(self):
@@ -2685,14 +2702,17 @@ class Subs(Expr):
 
         pt = list(self.point)
         if old in self.variables:
-            if _atomic(new) == {new} and not any(
-                    i.has(new) for i in self.args):
-                # the substitution is neutral
+            # A neutral rename must preserve the domain and free points.
+            if (type(old) in (Symbol, Dummy) and type(new) in (Symbol, Dummy)
+                    and old.assumptions0 == new.assumptions0
+                    and old not in self.free_symbols
+                    and not any(i.has(new) for i in self.args)):
                 return self.xreplace({old: new})
             # any occurrence of old before this point will get
             # handled by replacements from here on
-            i = self.variables.index(old)
-            for j in range(i, len(self.variables)):
+            indices = list(self._ordered_indices())
+            i = indices.index(self.variables.index(old))
+            for j in indices[i:]:
                 pt[j] = subs(pt[j])
             return self.func(self.expr, self.variables, pt)
         v = [subs(i) for i in self.variables]
@@ -2703,11 +2723,20 @@ class Subs(Expr):
         return self.func(expr, v, pt)
 
     def _eval_derivative(self, s):
+        # Resolve ordered substitutions before applying the chain rule.
+        value = self.doit()
+        if value != self:
+            return diff(value, s)
+        if any(type(v) not in (Symbol, Dummy) for v in self.variables):
+            return None
+
         # Apply the chain rule of the derivative on the substitution variables:
         f = self.expr
         vp = V, P = self.variables, self.point
-        val = Add.fromiter(p.diff(s)*Subs(f.diff(v), *vp).doit()
-            for v, p in zip(V, P))
+        point_derivatives = ((v, p.diff(s)) for v, p in zip(V, P))
+        # A zero coefficient must not evaluate a potentially singular partial.
+        val = Add.fromiter(dp*Subs(f.diff(v), *vp).doit()
+            for v, dp in point_derivatives if dp != 0)
 
         # these are all the free symbols in the expr
         efree = f.free_symbols

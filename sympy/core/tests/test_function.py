@@ -663,8 +663,21 @@ def test_Subs_function_order_after_point_replacement():
     second = Subs(source, (f, x), (definition, 0))
     assert first != second
     assert first.doit() == second.doit() == 0
-    assert first.subs(x, z + 1).doit() == z + 1
-    assert second.subs(x, z + 1).doit() == 0
+    assert first.free_symbols == second.free_symbols == {y}
+    for replacement in (z, z + 1):
+        assert first.subs(x, replacement).doit() == 0
+        assert second.subs(x, replacement).doit() == 0
+
+
+def test_Subs_function_order_after_expression_replacement():
+    source = Derivative(f(y), y)
+    definition = Lambda(t, x + t)
+    first = Subs(source, (x, f), (0, definition))
+    second = Subs(source, (f, x), (definition, 0))
+    assert first != second
+    assert first.doit() == second.doit() == 1
+    assert first.subs(source, f(y)).doit() == x + y
+    assert second.subs(source, f(y)).doit() == y
 
 
 def test_Subs_derivative_reordering_progress():
@@ -1208,6 +1221,77 @@ def test_Subs_self_mappings():
     second = Subs(source, (x, y, f), (x, 0, f))
     assert first != second
     assert first.doit() == second.doit() == cos(x)
+
+
+@pytest.mark.parametrize('variable', [x, Symbol('_0'), Symbol('r', real=True)])
+def test_Subs_as_dummy_preserves_free_points(variable):
+    source = Subs(f(variable), variable, variable)
+    result = source.as_dummy()
+    assert result.free_symbols == source.free_symbols == {variable}
+    assert result.doit() == source.doit()
+    assert result.as_dummy() == result
+
+
+def test_Subs_ordered_free_symbols():
+    for source, expected in [
+        (Subs(f(x), (x, y), (y, 0)), set()),
+        (Subs(f(x), (x, y), (y, z)), {z}),
+        (Subs(f(y), (y, x), (x, 1)), set()),
+        (Subs(f(y), (x, y), (1, x)), {x}),
+        (Subs(f(x, y), (x, y), (x, y + 1)), {x, y}),
+    ]:
+        assert source.free_symbols == expected
+        canonical = source.as_dummy()
+        assert canonical.free_symbols == expected
+        assert canonical.doit() == source.doit()
+
+
+def test_Subs_renaming_assumptions():
+    positive = Symbol('p', positive=True)
+    for old, new in [(x, positive), (positive, x)]:
+        source = Subs(sign(old, evaluate=False), old, 0)
+        assert source.subs(old, new).doit() == source.doit()
+
+
+def test_Subs_renaming_symbol_subclass():
+    class EvaluatingSymbol(Symbol):
+        def doit(self, **hints):
+            return S.One
+
+    source = Subs(f(x), x, 0)
+    assert source.subs(x, EvaluatingSymbol('replacement')).doit() == f(0)
+
+
+@pytest.mark.parametrize('expr', [Integral(x, (x, 0, 1)), Pow(x, 0, evaluate=False)])
+def test_Subs_self_mapping_evaluates_expression(expr):
+    source = Subs(expr, y, y)
+    assert source.doit() == expr.doit()
+    assert source.doit(deep=False) == expr
+
+
+@pytest.mark.parametrize('source, variable, expected', [
+    (Subs(f(x), (x, y), (y, y**2)), y,
+     2*y*Subs(Derivative(f(x), x), x, y**2)),
+    (Subs(exp(x + y), (x, y), (y, y**2)), y, 4*y*exp(2*y**2)),
+    (Subs(Subs(f(x), x, y), x, y**2), y, Derivative(f(y), y)),
+    (Subs(f(x), f, sin), x, cos(x)),
+    (Subs(f(x**2), x**2, 0), x, S.Zero),
+    (Subs(f(g(x)), g(x), x**2), x,
+     2*x*Subs(Derivative(f(y), y), y, x**2)),
+    (Subs(z*sqrt(x), x, 0), z, S.Zero),
+])
+def test_Subs_derivative_evaluation(source, variable, expected):
+    assert source.diff(variable) == expected
+
+
+def test_Subs_opaque_derivative():
+    class HeldSubs(Subs):
+        def doit(self, **hints):
+            return self
+
+    source = HeldSubs(f(x), f, sin)
+    assert source.diff(x) == Derivative(source, x, evaluate=False)
+    assert HeldSubs(z*sqrt(x), x, 0).diff(z) == 0
 
 
 def test_Subs_derivative_creates_target():
