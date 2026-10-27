@@ -841,7 +841,7 @@ class Basic(Printable):
         canonical = {}
 
         def assign(x, used):
-            if not isinstance(x, Basic):
+            if isinstance(x, type):
                 return
             used = set(used)
 
@@ -858,7 +858,7 @@ class Basic(Printable):
                 canonical[b] = Symbol(f'_{i}')
                 used.add(f'_{i}')
 
-            for arg in x.args:
+            for arg in getattr(x, 'args', ()):
                 assign(arg, used)
 
         assign(rv, set())

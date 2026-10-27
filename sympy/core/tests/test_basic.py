@@ -388,6 +388,23 @@ def test_as_dummy():
     assert Dummy(commutative=False).as_dummy().is_commutative is False
 
 
+def test_as_dummy_native_arguments():
+    class Node:
+        def __init__(self, arg):
+            self.args = (arg,)
+
+        @property
+        def func(self):
+            return type(self)
+
+        _xreplace = Basic._xreplace
+
+    x, canonical = symbols('x _0')
+    source = Basic(Node(Integral(x, (x, 0, 1))))
+    result = source.as_dummy().args[0].args[0]
+    assert result == Integral(canonical, (canonical, 0, 1))
+
+
 def test_as_dummy_scopes():
     u, v, x, y, _0, _1 = symbols('u v x y _0 _1')
 

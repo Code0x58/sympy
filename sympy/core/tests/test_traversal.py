@@ -109,6 +109,43 @@ def test_iterargs_atomic_arguments():
     assert list(iterfreeargs(source)) == [source, f]
 
 
+def test_iterargs_native_arguments():
+    class Node:
+        def __init__(self, *args):
+            self.args = args
+
+    x, y = symbols('x y')
+    inner = Node(x)
+    outer = Node(inner, y)
+    source = Basic(outer)
+    for traversal in (iterargs, iterfreeargs):
+        assert list(traversal(source)) == [source, outer, inner, y, x]
+    assert source.has(x)
+
+
+def test_iterfreeargs_native_binding():
+    class Node:
+        def __init__(self, *args):
+            self.args = args
+
+        def has(self, *patterns):
+            return any(arg.has(*patterns) for arg in self.args)
+
+    x, y = symbols('x y')
+    canonical = Symbol('_0')
+
+    class Binder(Node):
+        bound_symbols = (x,)
+        canonical_variables = {x: canonical}
+
+        def as_dummy(self):
+            return Node(canonical, y)
+
+    binder = Binder(x, y)
+    source = Basic(binder)
+    assert list(iterfreeargs(source)) == [source, binder, y]
+
+
 def test_deprecated_imports():
     x = symbols('x')
 

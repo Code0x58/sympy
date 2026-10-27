@@ -33,6 +33,8 @@ def iterargs(expr):
         yield i
         if isinstance(i, Basic):
             args.extend(i.args)
+        elif not isinstance(i, type):
+            args.extend(getattr(i, 'args', ()))
 
 
 def iterfreeargs(expr, _first=True):
@@ -58,15 +60,17 @@ def iterfreeargs(expr, _first=True):
     args = [expr]
     for i in args:
         yield i
-        if not isinstance(i, Basic):
+        is_basic = isinstance(i, Basic)
+        if not is_basic and isinstance(i, type):
             continue
         if _first and hasattr(i, 'bound_symbols'):
             void = i.canonical_variables.values()
             for arg in iterfreeargs(i.as_dummy(), _first=False):
-                if not isinstance(arg, Basic) or not arg.has(*void):
+                has = None if isinstance(arg, type) else getattr(arg, 'has', None)
+                if has is None or not has(*void):
                     yield arg
             continue
-        args.extend(i.args)
+        args.extend(i.args if is_basic else getattr(i, 'args', ()))
 
 
 class preorder_traversal:
