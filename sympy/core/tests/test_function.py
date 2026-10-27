@@ -7,6 +7,7 @@ from functools import partial
 from pickle import dumps, loads
 
 from sympy.concrete.summations import Sum
+from sympy.concrete.products import Product
 from sympy.core.add import Add
 from sympy.core.basic import Basic, _aresame
 from sympy.core.cache import clear_cache
@@ -1272,6 +1273,58 @@ def test_Subs_bound_expression_patterns():
         clear_cache()
         assert source.subs(x**2, z).doit() == 0
     assert Subs(f(x), x, f(x)).subs(f(x), z).doit() == f(z)
+
+
+@pytest.mark.parametrize('pattern', [
+    Integral(f(x), (x, 0, 1)),
+    Sum(f(x), (x, 0, 1)),
+    Product(f(x), (x, 1, 2)),
+    Subs(z, x, 0),
+    Lambda(x, x**2),
+])
+@pytest.mark.parametrize('wrap', [lambda value: value, g])
+@pytest.mark.parametrize('simultaneous', [False, True])
+def test_Subs_nested_bound_expression_patterns(pattern, wrap, simultaneous):
+    pattern = wrap(pattern)
+    source = Subs(pattern + f(x), x, 0)
+    assert source.subs(pattern, y, simultaneous=simultaneous).doit() == y + f(0)
+
+
+@pytest.mark.parametrize('binding, value', [
+    (lambda v: Integral(v, (Symbol('_0'), 0, 1)), Rational(1, 3)),
+    (lambda v: Sum(v, (Symbol('_0'), 0, 1)), S.One),
+    (lambda v: Product(v, (Symbol('_0'), 1, 2)), Integer(4)),
+])
+def test_Subs_nested_binding_label_collision(binding, value):
+    local = Symbol('_0')
+    first = Subs(f(x) + binding(x*local), x, 0)
+    second = Subs(f(x) + binding(local**2), x, 0)
+    assert first != second
+    assert first.doit() == f(0)
+    assert second.doit() == f(0) + value
+
+
+@pytest.mark.parametrize('binding', [
+    lambda v: Integral(h(v), (v, 0, 1)),
+    lambda v: Sum(h(v), (v, 0, 1)),
+    lambda v: Product(h(v), (v, 1, 2)),
+])
+def test_Subs_nested_binding_pattern_identity(binding):
+    first = Subs(f(x) + g(binding(x)), x, 0)
+    second = Subs(f(z) + g(binding(z)), z, 0)
+    assert first != second
+    pattern = binding(x)
+    assert first.subs(pattern, y).doit() == f(0) + g(y)
+    assert second.subs(pattern, y).doit() != f(0) + g(y)
+
+
+@pytest.mark.parametrize('variables', [(x, z), (Dummy('x'), Dummy('z'))])
+def test_Subs_indefinite_integral_identity(variables):
+    first, second = [
+        Subs(Integral(0, t) + Integral(1, v), v, f(y)) for v in variables]
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first.doit() == second.doit() == f(y)
 
 
 def test_Subs_function_replacement_cache():

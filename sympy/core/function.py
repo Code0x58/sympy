@@ -2685,11 +2685,14 @@ class Subs(Expr):
 
         # Normalize only one active ordinary symbol; order and assumptions can
         # become significant after further function or point replacements.
+        # Nested bindings also retain names needed by later pattern matches.
         if (len(variables) != 1 or type(variables[0]) not in (Symbol, Dummy)
                 or variables[0].assumptions0 != {'commutative': True}
                 or variables[0] not in self.expr.free_symbols
                 or self._has_clashing_symbols
-                or getattr(point[0], 'is_commutative', None) is not True):
+                or getattr(point[0], 'is_commutative', None) is not True
+                or any(getattr(node, 'bound_symbols', ()) for node in iterargs(self.expr)
+                       if not isinstance(node, type))):
             return key + super()._hashable_content()
         return key
 
@@ -2719,22 +2722,22 @@ class Subs(Expr):
             return self.func(self.expr, self.variables + (old,), pt + [new])
         variable = (v[0] if len(v) == 1 and type(v[0]) in (Symbol, Dummy)
                     and v[0] in self.expr.free_symbols else None)
-        # Keep bound names out of patterns and replacement expressions.
-        name_sensitive = False
         if (variable is not None and not isinstance(old, type)
-                and old._has(iterargs, variable)):
-            # A pattern's own bindings can hide this name from its identity.
-            with evaluate(False):
-                name_sensitive = old.xreplace(
-                    {variable: Dummy(variable.name, **variable.assumptions0)}) != old
-        if name_sensitive:
+                and variable in old.free_symbols):
             expr = self.expr
-        elif (variable is not None and not isinstance(new, type)
-                and new._has(iterargs, variable, Dummy)):
+        elif (variable is not None and (
+                not isinstance(old, type) and old._has(iterargs, variable)
+                or not isinstance(new, type) and new._has(iterargs, variable, Dummy))):
+            # Keep nested bindings intact while masking this bound name.
             # Dummies can carry deferred simultaneous replacements.
             dummy = Dummy(variable.name, **variable.assumptions0)
+            rule = {variable: dummy}
+            rule.update((node, node) for node in iterargs(self.expr)
+                if not isinstance(node, type)
+                and variable in getattr(node, 'bound_symbols', ())
+                and variable not in node.free_symbols)
             with evaluate(False):
-                masked = self.expr.xreplace({variable: dummy})
+                masked = self.expr.xreplace(rule)
             expr = subs(masked)
             if expr != masked:
                 v = [dummy]
