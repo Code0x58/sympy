@@ -2720,8 +2720,14 @@ class Subs(Expr):
         variable = (v[0] if len(v) == 1 and type(v[0]) in (Symbol, Dummy)
                     and v[0] in self.expr.free_symbols else None)
         # Keep bound names out of patterns and replacement expressions.
+        name_sensitive = False
         if (variable is not None and not isinstance(old, type)
                 and old._has(iterargs, variable)):
+            # A pattern's own bindings can hide this name from its identity.
+            with evaluate(False):
+                name_sensitive = old.xreplace(
+                    {variable: Dummy(variable.name, **variable.assumptions0)}) != old
+        if name_sensitive:
             expr = self.expr
         elif (variable is not None and not isinstance(new, type)
                 and new._has(iterargs, variable, Dummy)):

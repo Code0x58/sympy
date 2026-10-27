@@ -1285,7 +1285,6 @@ def test_Subs_function_replacement_cache():
 
 
 def test_Subs_pattern_scope_cache():
-    clear_cache()
     first, second = Subs(f(x), x, 0), Subs(f(z), z, 0)
     source = Subs(x + g(second), x, 0)
     assert first == second
@@ -1293,6 +1292,30 @@ def test_Subs_pattern_scope_cache():
         clear_cache()
         pattern.has(x)
         assert source.subs(second, 1).doit() == g(1)
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, Tuple, g])
+def test_Subs_equal_request_replacement(wrap):
+    first, second = Subs(f(x), x, 0), Subs(f(z), z, 0)
+    assert first == second
+    for source, pattern in [(first, second), (second, first)]:
+        clear_cache()
+        wrapped_source = wrap(source)
+        clear_cache()
+        assert wrapped_source.subs(wrap(pattern), y) == y
+        assert Subs(g(x), x, source).subs(pattern, 1).doit() == g(1)
+
+
+@pytest.mark.parametrize('warm_parent', [False, True])
+def test_Subs_equal_request_replacement_in_parent(warm_parent):
+    clear_cache()
+    first, second = Subs(f(x), x, 0), Subs(f(z), z, 0)
+    if warm_parent:
+        g(first)
+    source = Subs(x + g(second), x, 0)
+    for pattern in (first, second):
+        clear_cache()
+        assert source.subs(pattern, 1).doit() == g(1)
 
 
 def test_Subs_hash_structural_cache():

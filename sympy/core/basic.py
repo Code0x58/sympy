@@ -1365,7 +1365,8 @@ class Basic(Printable):
                 return rv
             return self
 
-        if _aresame(self, old):
+        # Equal children can use different bindings; retain the root type check.
+        if self.__class__ == old.__class__ and self == old:
             return new
 
         rv = self._eval_subs(old, new)
