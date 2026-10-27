@@ -2508,11 +2508,9 @@ class Subs(Expr):
         class CustomStrPrinter(StrPrinter):
             def _print_Dummy(self, expr):
                 return str(expr) + str(expr.dummy_index)
-        def mystr(expr, **settings):
-            p = CustomStrPrinter(settings)
-            return p.doprint(expr)
+        point_str = CustomStrPrinter(CustomStrPrinter._default_settings).doprint
         while 1:
-            s_pts = {p: Symbol(pre + mystr(p)) for p in pts}
+            s_pts = {p: Symbol(pre + point_str(p)) for p in pts}
             reps = [(v, s_pts[p])
                 for v, p in zip(variables, point)]
             # if any underscore-prepended symbol is already a free symbol
@@ -2523,16 +2521,14 @@ class Subs(Expr):
             # symbols
             if any(r in free and
                    r in variables and
-                   Symbol(pre + mystr(point[variables.index(r)])) != r
+                   Symbol(pre + point_str(point[variables.index(r)])) != r
                    for _, r in reps):
                 pre += "_"
                 continue
             break
 
         obj = Expr.__new__(cls, expr, Tuple(*variables), point)
-        obj._has_clashing_symbols = (
-            len(set(s_pts.values())) != len(s_pts) or
-            any(r in free and r not in variables for _, r in reps))
+        obj._normalization_symbol = reps[0][1]
         obj._expr = cls._xreplace_for_comparison(expr, dict(reps))
         return obj
 
@@ -2683,16 +2679,38 @@ class Subs(Expr):
         key = (Tuple(normalized, *(Tuple(*vp) for vp in ordered(unused))),
                _get_comparison_key(frozenset(point)))
 
-        # Normalize only one active ordinary symbol; order and assumptions can
-        # become significant after further function or point replacements.
-        # Nested bindings also retain names needed by later pattern matches.
+        # Normalize one active ordinary symbol only when renaming is reversible.
+        # Order, assumptions and nested scopes can matter after replacements.
         if (len(variables) != 1 or type(variables[0]) not in (Symbol, Dummy)
                 or variables[0].assumptions0 != {'commutative': True}
                 or variables[0] not in self.expr.free_symbols
-                or self._has_clashing_symbols
                 or getattr(point[0], 'is_commutative', None) is not True
                 or any(getattr(node, 'bound_symbols', ()) for node in iterargs(self.expr)
                        if not isinstance(node, type))):
+            return key + super()._hashable_content()
+
+        # Compare content without running constructors; only commutative
+        # operand order is irrelevant to the structure.
+        def structure(node, restore=False):
+            if restore and isinstance(node, Symbol) and node == self._normalization_symbol:
+                node = variables[0]
+            if type(node) is tuple:
+                return tuple, tuple(structure(arg, restore) for arg in node)
+            if type(node) is frozenset:
+                return frozenset, frozenset(structure(arg, restore) for arg in node)
+            if not isinstance(node, Basic) or not node.args:
+                return type(node), node
+            if type(node) is Mul:
+                commutative, noncommutative = node.args_cnc()
+                return (Mul,
+                    frozenset(Counter(structure(arg, restore) for arg in commutative).items()),
+                    tuple(structure(arg, restore) for arg in noncommutative))
+            content = tuple(structure(arg, restore) for arg in node._hashable_content())
+            if type(node) is Add:
+                content = frozenset(Counter(content).items())
+            return type(node), content
+
+        if structure(self.expr) != structure(self._expr, restore=True):
             return key + super()._hashable_content()
         return key
 

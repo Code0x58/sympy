@@ -31,6 +31,7 @@ from sympy.functions.special.gamma_functions import loggamma, polygamma
 from sympy.integrals import Integral
 from sympy.matrices.dense import Matrix
 from sympy.printing.str import sstr
+from sympy.printing.printer import Printer
 from sympy.series.order import O
 from sympy.tensor.indexed import Indexed
 from sympy.core.function import (PoleError, _mexpand, arity,
@@ -1520,11 +1521,78 @@ def test_Subs_evaluation_introduces_target():
     assert g(second).doit() == g(x)
 
 
-def test_Subs_comparison_context():
+def test_Subs_held_expression_identity():
+    quotient = Mul(x, Pow(x, -1, evaluate=False), evaluate=False)
+    power = Pow(x, 0, evaluate=False)
+    first = Subs(f(x) + quotient, x, 0)
+    second = Subs(f(x) + power, x, 0)
+    assert first != second
+    assert first.doit() == second.doit() == f(0) + 1
+    assert first.doit(deep=False) is S.NaN
+    assert second.doit(deep=False) == f(0) + 1
+
+
+def test_Subs_normalization_evaluates_function():
+    class F(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == Symbol('_2'):
+                return S.Zero
+
+    first = Subs(f(x) + F(x), x, 2)
+    second = Subs(f(x), x, 2)
+    assert first != second
+    assert first.doit() == f(2) + F(2)
+    assert second.doit() == f(2)
+
+
+def test_Subs_normalization_preserves_held_function():
+    class F(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == x:
+                raise ValueError('held argument')
+
+    source = Subs(F(x, evaluate=False), x, 2)
+    assert source == source.func(*source.args)
+    assert hash(source) == hash(source.func(*source.args))
+
+
+def test_Subs_normalization_operand_order():
+    first = Subs(x + y, x, 0)
+    second = Subs(y + z, z, 0)
+    assert first == second
+    assert hash(first) == hash(second)
+
+
+@pytest.mark.parametrize('settings', [
+    ({'order': 'lex'}, {'order': 'rev-lex'}),
+    ({'full_prec': True}, {'full_prec': False}),
+])
+@pytest.mark.thread_unsafe(reason='changes global printer settings')
+def test_Subs_identity_printer_settings(settings):
+    point = y + z + Float('1.23', 50)
+    saved = Printer._global_settings.copy()
+    requests = []
+    try:
+        for options in settings:
+            Printer.set_global_settings(**options)
+            requests.append(Subs(f(x), x, point))
+    finally:
+        Printer._global_settings.clear()
+        Printer._global_settings.update(saved)
+    first, second = requests
+    assert first.args == second.args
+    assert first == second
+    assert hash(first) == hash(second)
+
+
+@pytest.mark.parametrize('variables, points', [(x, 1), ((x, y), (1, 1))])
+def test_Subs_comparison_context(variables, points):
     source = f(x) + f(y) + exp(x)
     for context in (evaluate(False), _exp_is_pow(True)):
-        first = Subs(source, (x, y), (1, 1))
-        second = Subs(source, (x, y), (1, 1))
+        first = Subs(source, variables, points)
+        second = Subs(source, variables, points)
         with context:
             first_hash = hash(first)
         assert first == second
