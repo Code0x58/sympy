@@ -91,6 +91,26 @@ def test_equal_numeric_metadata_sort_keys():
     assert default_sort_key(first) == default_sort_key(second)
 
 
+def test_function_subclass_sort_keys():
+    base = Function('sort_subclass_base')
+    functions = [type('F', (base,), {}) for _ in range(2)] + [Function('F')]
+    keys = [default_sort_key(function) for function in functions]
+    assert len(set(keys)) == 3
+    first, second = functions[:2]
+    assert first(x).compare(second(x)) == -second(x).compare(first(x)) != 0
+    assert first(x) + second(x) == second(x) + first(x)
+
+
+def test_function_subclass_sort_key_collection():
+    function = type('F', (Function('collect_subclass_base'),), {})
+    reference = ref(function)
+    default_sort_key(function)
+    clear_cache()
+    del function
+    gc.collect()
+    assert reference() is None
+
+
 def test_equal_opaque_metadata_sort_keys():
     class Value:
         def __init__(self, label):

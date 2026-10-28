@@ -50,6 +50,12 @@ from sympy.abc import t, w, x, y, z
 f, g, h = symbols('f g h', cls=Function)
 _xi_1, _xi_2, _xi_3 = [Dummy() for i in range(3)]
 
+
+class _PickledFunctionSubclass(Function('pickle_subclass_base')):
+    def doit(self, **hints):
+        return S.One
+
+
 def test_f_expand_complex():
     x = Symbol('x', real=True)
 
@@ -1004,6 +1010,60 @@ def test_function_metaclass_identity():
     assert second != first
     assert first(x).compare(second(x)) == -second(x).compare(first(x)) != 0
     assert first(x) + second(x) == second(x) + first(x)
+
+
+@pytest.mark.parametrize('behavior', ['none', 'eval', 'doit'])
+def test_function_subclass_identity(behavior):
+    def evaluate(cls, *args):
+        return S.One
+
+    def doit(self, **hints):
+        return S.One
+
+    namespace = {'eval': classmethod(evaluate)} if behavior == 'eval' else (
+        {'doit': doit} if behavior == 'doit' else {})
+    base = Function('subclass_identity_base')
+    first = type('F', (base,), namespace.copy())
+    second = type('F', (base,), namespace.copy())
+    ordinary = Function('F')
+    assert len({first, second, ordinary}) == 3
+    for functions in ((first, second, ordinary), (ordinary, second, first)):
+        clear_cache()
+        for function in functions:
+            value = function(x)
+            if function is not ordinary and behavior == 'eval':
+                assert value is S.One
+            else:
+                assert value.func is function
+                if function is not ordinary and behavior == 'doit':
+                    assert value.doit() is S.One
+
+
+def test_function_subclass_pickle():
+    assert loads(dumps(_PickledFunctionSubclass)) is _PickledFunctionSubclass
+    value = loads(dumps(_PickledFunctionSubclass(x)))
+    assert value.func is _PickledFunctionSubclass
+    assert value.doit() is S.One
+
+
+@pytest.mark.parametrize('method', ['eval', 'doit'])
+def test_function_namespace_substitution_identity(method):
+    def evaluate(cls, arg):
+        if arg == x:
+            return S.Zero
+
+    def doit(self, **hints):
+        if self.args == (x,):
+            return S.Zero
+        return Basic.doit(self, **hints)
+
+    handler = classmethod(evaluate) if method == 'eval' else doit
+    function = UndefinedFunction('F', __dict__={method: handler})
+    first = Subs(function(x, evaluate=False), x, 1)
+    second = Subs(function(z), z, 1)
+    assert first != second
+    assert first.doit() == 0
+    assert second.doit() == function(1)
 
 
 @pytest.mark.parametrize('name', ['key', 'metadata_key'])

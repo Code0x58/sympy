@@ -1060,6 +1060,8 @@ class UndefinedFunction(FunctionClass):
 
     def __new__(mcl, name, bases=(AppliedUndef,), __dict__=None, **kwargs) -> type[AppliedUndef]:
         from .symbol import _filter_assumptions
+        # Only factory functions have identity determined by name and options.
+        is_factory = bases == (AppliedUndef,) and not __dict__
         # Allow Function('f', real=True)
         # and/or Function(Symbol('f', real=True))
         assumptions, kwargs = _filter_assumptions(kwargs)
@@ -1087,28 +1089,36 @@ class UndefinedFunction(FunctionClass):
         # Keep the original keyword values for reconstruction.
         __dict__['_kwargs'] = kwargs
         __dict__['_identity_kwargs'] = _function_metadata_key(kwargs)
+        __dict__['_is_factory'] = is_factory
         __dict__['_metadata_sort_key'] = (
             (_get_comparison_key((mcl, __dict__['_identity_kwargs'])),)
-            if kwargs or mcl is not UndefinedFunction else ())
-        # do this for pickling
-        __dict__['__module__'] = None
+            if is_factory and (kwargs or mcl is not UndefinedFunction) else ())
+        if is_factory:
+            __dict__['__module__'] = None
         obj = super().__new__(mcl, name, bases, __dict__)  # type: ignore
         obj.name = name
         obj._sage_ = _undef_sage_helper
+        if not is_factory:
+            obj._metadata_sort_key = (_get_comparison_key(obj),)
         return obj  # type: ignore
 
     def __instancecheck__(cls, instance):
         return cls in type(instance).__mro__
 
     _kwargs: dict[str, Any] = {}
+    _is_factory: bool = False
     _identity_kwargs: frozenset[tuple[str, Any]] = _empty_function_metadata
     _metadata_sort_key: tuple = ()
 
     def __hash__(self):
+        if not self._is_factory:
+            return type.__hash__(self)
         return hash((self.class_key(), self._identity_kwargs))
 
     def __eq__(self, other):
-        return (isinstance(other, self.__class__) and
+        if self is other:
+            return True
+        return (self._is_factory and type(self) is type(other) and other._is_factory and
             self.class_key() == other.class_key() and
             self._identity_kwargs == other._identity_kwargs)
 
@@ -1123,7 +1133,7 @@ class UndefinedFunction(FunctionClass):
 def _is_uninterpreted_function(cls):
     """Recognize functions without user-supplied evaluation behavior."""
     if type(cls) is UndefinedFunction:
-        return (cls.__bases__ == (AppliedUndef,)
+        return (cls._is_factory
                 and not (cls._kwargs.keys() - _assume_defined - {'nargs'}))
     if type(cls) is not FunctionClass or not issubclass(cls, Function):
         return False
@@ -1143,6 +1153,9 @@ def _is_uninterpreted_function(cls):
 # the __reduce__ method for reducing instances of the type rather than for the
 # type itself.
 def _reduce_undef(f):
+    if not f._is_factory:
+        # Class declarations retain Python's module-qualified identity.
+        return f.__qualname__
     return (_rebuild_undef, (f.name, f._kwargs))
 
 def _rebuild_undef(name, kwargs):
