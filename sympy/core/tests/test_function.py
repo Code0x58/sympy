@@ -915,7 +915,7 @@ def test_Subs_class_arguments_substitution():
     assert source.subs(sin, cos).doit() == cos(x) + y
     assert source.subs(g(x), 1) == source
     source = Subs(f(x) + y, (x, f), (0, sin))
-    assert source.subs(x, z) == Subs(f(z) + y, (z, f), (0, sin))
+    assert source.subs(x, z) == source
     assert source.subs(x, z).doit() == y
     source = Subs(f(x) + y, (Symbol, f), (1, sin))
     assert source.subs(y, z) == Subs(f(x) + z, (Symbol, f), (1, sin))
@@ -1638,6 +1638,47 @@ def test_Subs_renaming_symbol_subclass():
     assert source.subs(x, EvaluatingSymbol('replacement')).doit() == f(0)
 
 
+@pytest.mark.parametrize('kind', ['eval', 'doit', 'subclass'])
+@pytest.mark.parametrize('replacement', [z, Symbol('long'), Dummy('renamed')])
+def test_Subs_renaming_preserves_evaluator(kind, replacement):
+    class NamedFunction(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == x:
+                return S.Zero
+
+    class NamedExpr(Expr):
+        def doit(self, **hints):
+            return S.Zero if self.args == (x,) else self
+
+    if kind == 'subclass':
+        source = _NameSensitiveSubs(f(x), x, 1)
+    else:
+        expr = NamedFunction(x, evaluate=False) if kind == 'eval' else NamedExpr(x)
+        source = Subs(expr, x, 1)
+    assert source.subs(x, replacement).doit() == source.doit()
+
+
+@pytest.mark.parametrize('point', [
+    Integral(g(y), (x, 0, 1)), Sum(g(y), (x, 0, 1)), Product(g(y), (x, 1, 2)),
+])
+@pytest.mark.parametrize('clear_between', [False, True])
+def test_Subs_renaming_preserves_point_scope(point, clear_between):
+    first, second = Subs(f(x), x, point), Subs(f(z), z, point)
+    assert first == second
+    for sources in ((first, second), (second, first)):
+        clear_cache()
+        results = []
+        for source in sources:
+            if clear_between:
+                clear_cache()
+            result = source.subs(x, t)
+            assert result.point == (point,)
+            assert result.subs(point, 2).doit() == f(2)
+            results.append(result)
+        assert results[0] == results[1]
+
+
 @pytest.mark.parametrize('expr', [Integral(x, (x, 0, 1)), Pow(x, 0, evaluate=False)])
 def test_Subs_self_mapping_evaluates_expression(expr):
     source = Subs(expr, y, y)
@@ -1711,12 +1752,13 @@ def test_Subs_outer_subclass(constructor):
 
 @pytest.mark.parametrize('deep', [False, True])
 @pytest.mark.parametrize('variable, expected', [(x, 1), (Symbol('long'), 4)])
-def test_Subs_evaluation_returns_subclass(deep, variable, expected):
+@pytest.mark.parametrize('point', [S.One, Symbol('renamed')])
+def test_Subs_evaluation_returns_subclass(deep, variable, expected, point):
     class Deferred(Expr):
         def doit(self, **hints):
             return _NameSensitiveSubs(self, self.args[0], 1)
 
-    source = Subs(Deferred(variable), variable, 1)
+    source = Subs(Deferred(variable), variable, point)
     result = source.doit(deep=deep)
     if deep:
         assert result == expected

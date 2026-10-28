@@ -2762,12 +2762,13 @@ class Subs(Expr):
 
         pt = list(self.point)
         if old in self.variables:
-            # A neutral rename must preserve the domain and free points.
+            # A neutral rename must preserve evaluation, domain, and free points.
             if (type(old) in (Symbol, Dummy) and type(new) in (Symbol, Dummy)
+                    and self._comparison_key[0]
                     and old.assumptions0 == new.assumptions0
                     and old not in self.free_symbols
                     and not any(i._has(iterargs, new) for i in self.args)):
-                return self.xreplace({old: new})
+                return self.func(self.expr.xreplace({old: new}), new, subs(self.point))
             # any occurrence of old before this point will get
             # handled by replacements from here on
             indices = list(self._ordered_indices())
