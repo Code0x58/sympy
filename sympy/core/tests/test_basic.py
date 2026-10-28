@@ -96,6 +96,43 @@ def test_compare_class_and_native_transitivity():
     assert first.compare(third) < 0
 
 
+def test_compare_frozenset_arguments():
+    for convert in (int, S):
+        values = [frozenset(map(convert, items))
+                  for items in ((1, 9), (9, 1), (8, 1))]
+        for nested in (False, True):
+            first, second, other = [Basic(frozenset([value]) if nested else value)
+                                    for value in values]
+            assert first == second
+            assert first.compare(second) == second.compare(first) == 0
+            assert first.compare(other) == second.compare(other) != 0
+            assert first.compare(other) == -other.compare(first)
+
+
+def test_compare_frozenset_sort_key_ties():
+    class CollidingSymbol(Symbol):
+        def __hash__(self):
+            return 0
+
+    positive = CollidingSymbol('a', positive=True)
+    negative = CollidingSymbol('a', negative=True)
+    zero = CollidingSymbol('a', zero=True)
+    assert default_sort_key(positive) == default_sort_key(negative)
+    first, second, other = [Basic(frozenset(items)) for items in (
+        (positive, negative), (negative, positive), (positive, zero))]
+    assert first == second
+    assert first.compare(second) == second.compare(first) == 0
+    assert first.compare(other) == second.compare(other) != 0
+    assert first.compare(other) == -other.compare(first)
+
+
+def test_compare_frozenset_and_native_arguments():
+    first = Basic(frozenset([S.One]))
+    for value in (None, 1, 1.0, 1 + 2j, False, 'f', (1,)):
+        second = Basic(value)
+        assert first.compare(second) == -second.compare(first) != 0
+
+
 def test_sort_key_class_and_native_arguments():
     for cls in (Function('f'), Symbol, int):
         first = Basic(cls)

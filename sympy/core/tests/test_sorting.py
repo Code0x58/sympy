@@ -14,6 +14,7 @@ from sympy.core.containers import Tuple
 from sympy.core.cache import clear_cache
 from sympy.core.function import Function, Subs
 from sympy.core.numbers import Float
+from sympy.core.singleton import S
 from sympy.core.sorting import default_sort_key, ordered
 from sympy.core.symbol import Symbol
 from sympy.functions.elementary.trigonometric import cos, sin
@@ -34,6 +35,21 @@ def test_default_sort_key():
             return 'x.y'
     func = C()
     assert sorted([x, func], key=default_sort_key) == [func, x]
+
+
+@pytest.mark.parametrize('order', [None, 'rev-lex'])
+@pytest.mark.parametrize('nested', [False, True])
+@pytest.mark.parametrize('convert', [int, S])
+def test_frozenset_sort_key(order, nested, convert):
+    first, second, other = [frozenset(map(convert, items))
+                            for items in ((1, 9), (9, 1), (8, 1))]
+    if nested:
+        first, second, other = [frozenset([value]) for value in (first, second, other)]
+    key = lambda value: default_sort_key(value, order=order)
+    assert first == second
+    assert key(first) == key(second)
+    assert key(first) != key(other)
+    assert sorted([first, other], key=key) == sorted([other, second], key=key)
 
 
 def test_class_sort_keys():

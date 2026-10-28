@@ -439,10 +439,16 @@ class Basic(Printable):
                     c = bool(lk > rk) - bool(lk < rk)
             elif l == r:
                 c = 0
-            elif isinstance(l, frozenset):
-                l = Basic(*l) if isinstance(l, frozenset) else l
-                r = Basic(*r) if isinstance(r, frozenset) else r
-                c = l.compare(r)
+            elif isinstance(l, frozenset) or isinstance(r, frozenset):
+                if not isinstance(l, frozenset):
+                    c = 1
+                elif not isinstance(r, frozenset):
+                    c = -1
+                else:
+                    # Wrapping entries gives native and class fields the same rules.
+                    l = Basic(*sorted(map(Basic, l), key=_args_sortkey))
+                    r = Basic(*sorted(map(Basic, r), key=_args_sortkey))
+                    c = l.compare(r)
             else:
                 c = (l > r) - (l < r)
             if c:

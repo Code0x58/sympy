@@ -139,7 +139,7 @@ def default_sort_key(item, order=None):
         if isinstance(item, dict):
             args = item.items()
             unordered = True
-        elif isinstance(item, set):
+        elif isinstance(item, (set, frozenset)):
             args = item
             unordered = True
         else:
