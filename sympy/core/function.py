@@ -37,14 +37,13 @@ from collections.abc import Iterable
 import copyreg
 import os
 from decimal import Decimal
-from fractions import Fraction
 from itertools import count as _count
 from threading import RLock
 from weakref import ref, WeakValueDictionary
 
 from .add import Add
 from .assumptions import _assume_defined
-from .basic import Atom, Basic, _atomic
+from .basic import Atom, Basic, _atomic, _is_standard_number
 from .cache import cacheit, cached_property
 from .containers import Tuple, Dict
 from .decorators import _sympifyit
@@ -1031,8 +1030,7 @@ def _canonical_function_metadata(value):
                 return (type(value), value)
             return (type(value), frozenset(map(_canonical_function_metadata, value.args)))
         return value
-    if (type(value) is bool or type(value) is int or type(value) is float or
-            type(value) is complex or type(value) is Decimal or type(value) is Fraction):
+    if _is_standard_number(value):
         if type(value) is Decimal and value.is_finite():
             return Rational(*value.as_integer_ratio())
         return sympify(value)

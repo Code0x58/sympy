@@ -4,9 +4,9 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Iterable
 from decimal import Decimal
+from fractions import Fraction
 from itertools import zip_longest
 from functools import cmp_to_key
-from numbers import Complex as ComplexABC
 from typing import TYPE_CHECKING, overload
 
 from .assumptions import _prepare_class_assumptions
@@ -37,6 +37,13 @@ if TYPE_CHECKING:
     class _SupportsItems(Protocol[_K_co, _V_co]):
         def items(self) -> Iterable[tuple[_K_co, _V_co]]:
             ...
+
+
+def _is_standard_number(value):
+    """Recognize native numeric types with unmodified value semantics."""
+    cls = type(value)
+    return (cls is bool or cls is int or cls is float or cls is complex
+            or cls is Decimal or cls is Fraction)
 
 
 def as_Basic(expr):
@@ -452,9 +459,8 @@ class Basic(Printable):
                     l = Basic(*sorted(map(Basic, l), key=_args_sortkey))
                     r = Basic(*sorted(map(Basic, r), key=_args_sortkey))
                     c = l.compare(r)
-            elif ((isinstance(l, complex) or isinstance(r, complex))
-                    and isinstance(l, (ComplexABC, Decimal))
-                    and isinstance(r, (ComplexABC, Decimal))):
+            elif ((type(l) is complex or type(r) is complex)
+                    and _is_standard_number(l) and _is_standard_number(r)):
                 l, r = (l.real, l.imag), (r.real, r.imag)
                 c = (l > r) - (l < r)
             else:

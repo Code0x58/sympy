@@ -164,6 +164,32 @@ def test_native_complex_argument_ordering():
                     assert Basic(a).compare(Basic(b)) == (i > j) - (i < j)
 
 
+def test_native_complex_subclass_ordering():
+    class TaggedComplex(complex):
+        def __new__(cls, value, tag):
+            obj = super().__new__(cls, value)
+            obj.tag = tag
+            return obj
+
+        def __eq__(self, other):
+            return type(other) is type(self) and self.tag == other.tag
+
+        def __hash__(self):
+            return hash(self.tag)
+
+        def __lt__(self, other):
+            return self.tag < other.tag
+
+        def __gt__(self, other):
+            return self.tag > other.tag
+
+    first = Basic(TaggedComplex(1 + 2j, 1))
+    second = Basic(TaggedComplex(1 + 2j, 2))
+    assert first != second
+    assert first.compare(second) == -1
+    assert second.compare(first) == 1
+
+
 def test_sort_key_class_and_native_arguments():
     for cls in (Function('f'), Symbol, int):
         first = Basic(cls)
