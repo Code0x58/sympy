@@ -2538,8 +2538,8 @@ class Subs(Expr):
         if not point:
             return sympify(expr)
 
-        # denest
-        if isinstance(expr, Subs):
+        # Denest ordinary Subs without bypassing subclass evaluators.
+        if cls is Subs and type(expr) is Subs:
             variables = expr.variables + variables
             point = expr.point + point
             expr = expr.expr
@@ -2625,7 +2625,7 @@ class Subs(Expr):
             rv = e.doit(**hints).subs(replacements)
 
         # Reordering an otherwise unchanged request is not evaluation progress.
-        if (isinstance(rv, Subs) and rv.expr == self.expr
+        if (type(self) is Subs and type(rv) is Subs and rv.expr == self.expr
                 and Counter(zip(rv.variables, rv.point)) == Counter(zip(v, p))):
             return self
         if hints.get('deep', True) and rv != self:
@@ -2691,10 +2691,13 @@ class Subs(Expr):
         """Retain literal arguments unless a single binding can be renamed."""
         from .power import Pow
         from sympy.integrals.integrals import Integral
-        variables = self.variables.args
-        point = self.point.args
         # False preserves literal arguments; True marks a normalized binding.
         key = (False,) + super()._hashable_content()
+        if type(self) is not Subs:
+            return key
+
+        variables = self.variables.args
+        point = self.point.args
 
         # Normalize one active ordinary symbol only when renaming is reversible.
         # Order, assumptions, nested scopes and evaluators can matter.

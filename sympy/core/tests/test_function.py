@@ -56,6 +56,11 @@ class _PickledFunctionSubclass(Function('pickle_subclass_base')):
         return S.One
 
 
+class _NameSensitiveSubs(Subs):
+    def doit(self, **hints):
+        return Integer(len(self.variables[0].name))
+
+
 def test_f_expand_complex():
     x = Symbol('x', real=True)
 
@@ -1653,6 +1658,71 @@ def test_Subs_self_mapping_evaluates_expression(expr):
 ])
 def test_Subs_derivative_evaluation(source, variable, expected):
     assert source.diff(variable) == expected
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, Tuple, g])
+def test_Subs_subclass_identity(wrap):
+    variable = Symbol('long')
+    first = _NameSensitiveSubs(f(x), x, 1)
+    second = _NameSensitiveSubs(f(variable), variable, 1)
+    assert first.doit() == 1
+    assert second.doit() == 4
+    clear_cache()
+    assert wrap(first) != wrap(second)
+    assert len({first, second}) == 2
+    assert (first + second).doit() == 5
+
+
+@pytest.mark.parametrize('deep', [False, True])
+def test_Subs_inner_subclass(deep):
+    inner = _NameSensitiveSubs(f(x), x, 1)
+    source = Subs(inner, y, 2)
+    assert source.expr is inner
+    assert source.variables == (y,)
+    assert source.doit(deep=deep) == 1
+
+
+def test_Subs_subclass_property_views():
+    class TupleViews(Subs):
+        @property
+        def variables(self):
+            return tuple(super().variables)
+
+        @property
+        def point(self):
+            return tuple(super().point)
+
+    first = TupleViews(f(x), x, 1)
+    second = first.func(*first.args)
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first.doit() == f(1)
+
+
+@pytest.mark.parametrize('constructor', [Subs, _NameSensitiveSubs])
+def test_Subs_outer_subclass(constructor):
+    variable = Symbol('long')
+    inner = constructor(f(x), x, 1)
+    source = _NameSensitiveSubs(inner, variable, 2)
+    assert source.expr is inner
+    assert source.variables == (variable,)
+    assert source.doit() == 4
+
+
+@pytest.mark.parametrize('deep', [False, True])
+@pytest.mark.parametrize('variable, expected', [(x, 1), (Symbol('long'), 4)])
+def test_Subs_evaluation_returns_subclass(deep, variable, expected):
+    class Deferred(Expr):
+        def doit(self, **hints):
+            return _NameSensitiveSubs(self, self.args[0], 1)
+
+    source = Subs(Deferred(variable), variable, 1)
+    result = source.doit(deep=deep)
+    if deep:
+        assert result == expected
+    else:
+        assert type(result) is _NameSensitiveSubs
+        assert result.expr == source.expr
 
 
 def test_Subs_opaque_derivative():
