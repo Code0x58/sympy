@@ -52,7 +52,7 @@ from .evalf import pure_complex
 from .expr import Expr, AtomicExpr
 from .logic import fuzzy_and, fuzzy_or, fuzzy_not, FuzzyBool
 from .mul import Mul
-from .numbers import Rational, Float, Integer
+from .numbers import Rational, Float, Integer, Number, Infinity, NegativeInfinity
 from .operations import LatticeOp
 from .parameters import global_parameters, evaluate, distribute, _exp_is_pow
 from .rules import Transform
@@ -1161,6 +1161,22 @@ def _is_uninterpreted_function(cls):
                if name not in ('__dict__', '__weakref__')):
             return False
     return False
+
+
+@cacheit
+def _has_standard_atom_hooks(cls):
+    """Recognize atoms whose hooks preserve an ordinary bound symbol."""
+    methods = (
+        ('doit', Atom.doit),
+        ('_subs', Basic._subs),
+        ('xreplace', Atom.xreplace),
+        ('_xreplace', Basic._xreplace),
+    )
+    substitute = inspect.getattr_static(cls, '_eval_subs')
+    return (all(inspect.getattr_static(cls, name) is method for name, method in methods)
+            and any(substitute is method for method in (
+                Basic._eval_subs, Symbol._eval_subs, Number._eval_subs,
+                Infinity._eval_subs, NegativeInfinity._eval_subs)))
 
 
 # Using copyreg is the only way to make a dynamically generated instance of a
@@ -2717,7 +2733,7 @@ class Subs(Expr):
                 if not _is_uninterpreted_function(node.func):
                     return key
             elif isinstance(node, Atom):
-                if node.args or type(node).doit is not Atom.doit:
+                if node.args or not _has_standard_atom_hooks(type(node)):
                     return key
             elif type(node) not in (Basic, Expr, Add, Mul, Pow, Derivative,
                                    Tuple, Dict, Integral):

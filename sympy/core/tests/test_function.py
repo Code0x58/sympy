@@ -1611,6 +1611,48 @@ def test_Subs_replacement_nested_binding():
         assert source.subs(y, replacement).doit() == f(0) + replacement
 
 
+@pytest.mark.parametrize('hook', ['_eval_subs', '_subs'])
+def test_Subs_atomic_substitution_hooks(hook):
+    def substitute(self, old, new, **hints):
+        return S.Zero if old == x else self
+
+    atom = type('NamedAtom', (AtomicExpr,), {hook: substitute})()
+    first, second = Subs(Tuple(f(x), atom), x, 1), Subs(Tuple(f(z), atom), z, 1)
+    clear_cache()
+    first_value = first.doit()
+    clear_cache()
+    assert first_value != second.doit()
+    assert first != second
+
+
+@pytest.mark.parametrize('hook', ['_xreplace', 'xreplace'])
+def test_Subs_atomic_replacement_hooks(hook):
+    def replace(self, rule):
+        raise ValueError('opaque atom replacement')
+
+    namespace = {hook: replace}
+    if hook == 'xreplace':
+        namespace['free_symbols'] = property(lambda self: {x})
+    atom = type('OpaqueAtom', (AtomicExpr,), namespace)()
+    expr = Tuple(f(x), atom) if hook == '_xreplace' else atom
+    source = Subs(expr, x, 1)
+    rebuilt = source.func(*source.args)
+    assert source == rebuilt
+    assert hash(source) == hash(rebuilt)
+    with raises(ValueError):
+        expr.xreplace({x: z})
+
+
+@pytest.mark.parametrize('atom', [
+    S.One, S.Half, Float(1.5), S.Infinity, S.NegativeInfinity,
+    S.ComplexInfinity, S.NaN, pi, I, y, Dummy('other'),
+])
+def test_Subs_standard_atomic_behavior(atom):
+    first, second = Subs(Tuple(f(x), atom), x, 0), Subs(Tuple(f(z), atom), z, 0)
+    assert first == second
+    assert hash(first) == hash(second)
+
+
 def test_Subs_scope_mask_preserves_held_expression():
     class EvaluatingFunction(Function):
         @classmethod
