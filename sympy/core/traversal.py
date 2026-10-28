@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterator
 
-from .basic import Basic
+from .basic import Basic, _iterable_args
 from .sorting import ordered
 from .sympify import sympify
 from sympy.utilities.iterables import iterable
@@ -34,7 +34,7 @@ def iterargs(expr):
         if isinstance(i, Basic):
             args.extend(i.args)
         elif not isinstance(i, type):
-            args.extend(getattr(i, 'args', ()))
+            args.extend(_iterable_args(getattr(i, 'args', ())))
 
 
 def iterfreeargs(expr, _first=True):
@@ -70,7 +70,10 @@ def iterfreeargs(expr, _first=True):
                 if has is None or not has(*void):
                     yield arg
             continue
-        args.extend(i.args if is_basic else getattr(i, 'args', ()))
+        if is_basic:
+            args.extend(i.args)
+        else:
+            args.extend(_iterable_args(getattr(i, 'args', ())))
 
 
 class preorder_traversal:

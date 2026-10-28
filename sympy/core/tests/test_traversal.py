@@ -10,8 +10,8 @@ from sympy.integrals.integrals import Integral
 from sympy.polys.polytools import factor
 from sympy.core.traversal import preorder_traversal, use, postorder_traversal, iterargs, iterfreeargs
 from sympy.functions.elementary.piecewise import ExprCondPair, Piecewise
-from sympy.testing.pytest import warns_deprecated_sympy
-from sympy.utilities.iterables import capture
+from sympy.testing.pytest import raises, warns_deprecated_sympy
+from sympy.utilities.iterables import capture, NotIterable
 
 b1 = Basic()
 b2 = Basic(b1)
@@ -121,6 +121,73 @@ def test_iterargs_native_arguments():
     for traversal in (iterargs, iterfreeargs):
         assert list(traversal(source)) == [source, outer, inner, y, x]
     assert source.has(x)
+
+
+def test_iterargs_native_leaf_arguments():
+    class Node:
+        def __init__(self, args):
+            self.args = args
+
+    x, y = symbols('x y')
+    for args in (None, 1, Symbol):
+        node = Node(args)
+        source = Basic(node, y)
+        for traversal in (iterargs, iterfreeargs):
+            assert list(traversal(source)) == [source, node, y]
+        assert not source.has(x)
+
+
+def test_iterargs_native_iterable_arguments():
+    class Node:
+        def __init__(self, args):
+            self.args = args
+
+    x, y = symbols('x y')
+    for traversal in (iterargs, iterfreeargs):
+        for factory in (list, iter):
+            inner = Node((x,))
+            outer = Node(factory((inner, y)))
+            source = Basic(outer)
+            assert list(traversal(source)) == [source, outer, inner, y, x]
+        for args, children in [('xy', ['x', 'y']), ({x: None, y: None}, [x, y])]:
+            outer = Node(args)
+            source = Basic(outer)
+            assert list(traversal(source)) == [source, outer] + children
+
+
+def test_iterargs_native_iteration_opt_out():
+    class Children:
+        _iterable = False
+
+        def __iter__(self):
+            raise AssertionError('iteration is disabled')
+
+    class OpaqueChildren(NotIterable):
+        def __iter__(self):
+            yield S.One
+            raise AssertionError('iteration is disabled')
+
+    for children in (Children(), OpaqueChildren()):
+        class Node:
+            args = children
+
+        node = Node()
+        source = Basic(node)
+        for traversal in (iterargs, iterfreeargs):
+            assert list(traversal(source)) == [source, node]
+
+
+def test_iterargs_native_iteration_error():
+    class Children:
+        def __iter__(self):
+            raise ValueError('native iteration failed')
+
+    class Node:
+        args = Children()
+
+    for traversal in (iterargs, iterfreeargs):
+        with raises(ValueError):
+            list(traversal(Basic(Node())))
 
 
 def test_iterfreeargs_native_binding():

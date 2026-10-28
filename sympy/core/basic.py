@@ -18,7 +18,7 @@ from ._print_helpers import Printable
 
 from sympy.utilities.decorator import deprecated
 from sympy.utilities.exceptions import sympy_deprecation_warning
-from sympy.utilities.iterables import iterable, numbered_symbols
+from sympy.utilities.iterables import iterable, numbered_symbols, NotIterable
 from sympy.utilities.misc import filldedent, func_name
 
 
@@ -44,6 +44,11 @@ def _is_standard_number(value):
     cls = type(value)
     return (cls is bool or cls is int or cls is float or cls is complex
             or cls is Decimal or cls is Fraction)
+
+
+def _iterable_args(args):
+    """Return an iterable argument sequence, or an empty tuple for a leaf."""
+    return args if iterable(args, exclude=NotIterable) else ()
 
 
 def as_Basic(expr):
@@ -889,7 +894,8 @@ class Basic(Printable):
                 canonical[b] = Symbol(f'_{i}')
                 used.add(f'_{i}')
 
-            for arg in getattr(x, 'args', ()):
+            children = x.args if isinstance(x, Basic) else _iterable_args(getattr(x, 'args', ()))
+            for arg in children:
                 assign(arg, used)
 
         assign(rv, set())
@@ -1892,8 +1898,9 @@ class Basic(Printable):
             """
             if isinstance(rv, type):
                 return rv
-            args = getattr(rv, 'args', None)
-            if args is not None:
+            raw_args = getattr(rv, 'args', None)
+            if raw_args is not None:
+                args = raw_args if isinstance(rv, Basic) else _iterable_args(raw_args)
                 if args:
                     newargs = tuple([walk(a, F) for a in args])
                     if args != newargs:

@@ -549,6 +549,28 @@ def test_as_dummy_native_arguments():
     assert result == Integral(canonical, (canonical, 0, 1))
 
 
+def test_transform_native_leaf_arguments():
+    class Children:
+        _iterable = False
+
+        def __iter__(self):
+            raise AssertionError('iteration is disabled')
+
+    class Leaf:
+        def __init__(self, args):
+            self.args = args
+
+    x, y, canonical = symbols('x y _0')
+    for args in (None, 0, 1, Children()):
+        leaf = Leaf(args)
+        source = Basic(leaf, Integral(x, (x, 0, 1)), y)
+        assert source.as_dummy() == Basic(leaf, Integral(canonical, (canonical, 0, 1)), y)
+        assert source.replace(lambda node: node == y,
+                              lambda node: x) == Basic(leaf, Integral(x, (x, 0, 1)), x)
+        expected = source if args is None else Basic(x, Integral(x, (x, 0, 1)), y)
+        assert source.replace(lambda node: node is leaf, lambda node: x) == expected
+
+
 def test_as_dummy_scopes():
     u, v, x, y, _0, _1 = symbols('u v x y _0 _1')
 
