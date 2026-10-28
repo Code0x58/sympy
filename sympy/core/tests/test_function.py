@@ -1003,8 +1003,10 @@ def test_function_basic_metadata_types(native, symbolic):
     assert second(x).func is second
 
 
-def test_function_shared_callable_metadata():
-    implementation = partial(pow, 2)
+@pytest.mark.parametrize('implementation', [
+    staticmethod(partial(pow, 2)), staticmethod(lambda arg: arg + 1),
+])
+def test_function_shared_callable_metadata(implementation):
     first = Function('a', _imp_=implementation)
     first_hash = hash(first)
     clear_cache()
@@ -1012,6 +1014,7 @@ def test_function_shared_callable_metadata():
     assert first == second
     assert first_hash == hash(second)
     assert first(x).compare(second(x)) == 0
+    assert first(1).evalf() == second(1).evalf() == Float(2)
 
 
 def test_function_metaclass_identity():
@@ -1118,6 +1121,61 @@ def test_function_namespace_metadata_types(namespace):
     assert type(second.value[0]) is int
     assert first(x).func is first
     assert second(x).func is second
+
+
+@pytest.mark.parametrize('positional', [False, True])
+@pytest.mark.parametrize('values', [(1, S.One), (Fraction(1, 10), Rational(1, 10))])
+def test_function_explicit_base_identity(positional, values):
+    clear_cache()
+    bases = [UndefinedFunction('explicit_base', value=value) for value in values]
+    assert bases[0] == bases[1]
+    derived = [Function('derived', (base,)) if positional else
+               Function('derived', bases=(base,)) for base in bases]
+    assert derived[0] is not derived[1]
+    for function, base in zip(derived, bases):
+        assert function.__bases__ == (base,)
+        assert function.__bases__[0] is base
+
+
+@pytest.mark.parametrize('constructor', [Function, UndefinedFunction])
+@pytest.mark.parametrize('method', ['eval', 'doit', '_imp_', '_imp_classmethod'])
+@pytest.mark.parametrize('values', [
+    (Fraction(1, 10), Rational(1, 10)), (((1,),), ((S.One,),)),
+])
+def test_function_keyword_method_identity(constructor, method, values):
+    def evaluate(cls, *args):
+        value = cls.value
+        while isinstance(value, tuple):
+            value = value[0]
+        return S.Zero if type(value) in (int, Fraction) else S.One
+
+    def apply(self, *args, **hints):
+        return evaluate(self.func)
+
+    key = '_imp_' if method == '_imp_classmethod' else method
+    handler = classmethod(evaluate) if method in ('eval', '_imp_classmethod') else apply
+    first, second = [constructor('keyword_method', value=value, **{key: handler})
+                     for value in values]
+    for functions in (((first, 0), (second, 1)), ((second, 1), (first, 0))):
+        clear_cache()
+        for function, expected in functions:
+            value = function(1)
+            result = value.evalf() if key == '_imp_' else value.doit()
+            assert int(result) == expected
+    assert first != second
+    assert len({first, second}) == 2
+
+
+@pytest.mark.parametrize('constructor', [Function, UndefinedFunction])
+def test_function_unhashable_keyword_descriptor(constructor):
+    class Evaluator:
+        __hash__ = None
+
+        def __get__(self, instance, owner):
+            return lambda arg: owner.value[0]
+
+    function = constructor('unhashable_descriptor', eval=Evaluator(), value=[S.One])
+    assert function(x) is S.One
 
 
 @pytest.mark.parametrize('name', ['key', 'metadata_key'])

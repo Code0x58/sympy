@@ -428,6 +428,13 @@ class Application(Basic, metaclass=FunctionClass):
             return new(*[i._subs(old, new) for i in self.args])
 
 
+def _has_function_descriptors(options):
+    # A static numerical implementation has no class or instance receiver.
+    return any(hasattr(type(value), '__get__')
+        and not (name == '_imp_' and type(value) is staticmethod)
+        for name, value in options.items())
+
+
 @cacheit
 def _new_function(metadata_key, cls, /, *args, **options):
     """Cache construction using original arguments and normalized metadata."""
@@ -499,9 +506,14 @@ class Function(Application, Expr):
         return False
 
     def __new__(cls, *args, **options) -> type[AppliedUndef]:  # type: ignore
-        if cls is Function and options.get('__dict__') is not None:
-            return UndefinedFunction(*args, **options)
-        key = _function_metadata_key(options) if cls is Function else None
+        if cls is Function:
+            if (len(args) != 1 or options and ('bases' in options
+                    or options.get('__dict__') is not None
+                    or _has_function_descriptors(options))):
+                return UndefinedFunction(*args, **options)
+            key = _function_metadata_key(options)
+        else:
+            key = None
         return _new_function(key, cls, *args, **options)
 
     @classmethod
@@ -1063,7 +1075,8 @@ class UndefinedFunction(FunctionClass):
     def __new__(mcl, name, bases=(AppliedUndef,), __dict__=None, **kwargs) -> type[AppliedUndef]:
         from .symbol import _filter_assumptions
         # Only factory functions have identity determined by name and options.
-        is_factory = bases == (AppliedUndef,) and not __dict__
+        is_factory = (bases == (AppliedUndef,) and not __dict__
+                      and not _has_function_descriptors(kwargs))
         # Allow Function('f', real=True)
         # and/or Function(Symbol('f', real=True))
         assumptions, kwargs = _filter_assumptions(kwargs)
@@ -1090,7 +1103,8 @@ class UndefinedFunction(FunctionClass):
         kwargs.update(assumptions)
         # Keep the original keyword values for reconstruction.
         __dict__['_kwargs'] = kwargs
-        __dict__['_identity_kwargs'] = _function_metadata_key(kwargs)
+        __dict__['_identity_kwargs'] = (
+            _function_metadata_key(kwargs) if is_factory else _empty_function_metadata)
         __dict__['_is_factory'] = is_factory
         __dict__['_metadata_sort_key'] = (
             (_get_comparison_key((mcl, __dict__['_identity_kwargs'])),)
