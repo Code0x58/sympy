@@ -991,6 +991,18 @@ def test_function_numeric_metadata_cache(first_value, second_value):
     assert first != second
 
 
+@pytest.mark.parametrize('native, symbolic', [
+    (1, S.One), (True, S.true), ((1,), Tuple(1)),
+])
+def test_function_basic_metadata_types(native, symbolic):
+    clear_cache()
+    first = Function('basic_metadata_types', value=Basic(native))
+    second = Function('basic_metadata_types', value=Basic(symbolic))
+    assert first != second and second != first
+    assert first(x).func is first
+    assert second(x).func is second
+
+
 def test_function_shared_callable_metadata():
     implementation = partial(pow, 2)
     first = Function('a', _imp_=implementation)

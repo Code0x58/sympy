@@ -112,6 +112,56 @@ def test_sort_key_class_and_native_arguments():
         assert first_key == second.sort_key()
 
 
+def test_native_and_sympy_argument_ordering():
+    x = Symbol('x')
+    for symbolic in (S.One, x, Basic(x)):
+        first = Basic(symbolic)
+        for native in (None, 1, 1.0, False, 'x', (1,), frozenset([1])):
+            second = Basic(native)
+            assert first != second and second != first
+            assert first.compare(second) == -1
+            assert second.compare(first) == 1
+            clear_cache()
+            assert sorted([first, second], key=default_sort_key) == [first, second]
+            clear_cache()
+            assert sorted([second, first], key=default_sort_key) == [first, second]
+
+
+def test_native_and_sympy_argument_identity():
+    for native, symbolic in [(1, S.One), (1.0, Float(1)),
+            (True, S.true), (False, S.false), ((1,), Tuple(1))]:
+        first, second = Basic(native), Basic(symbolic)
+        assert first.xreplace({native: S(2)}) == first
+        assert second.xreplace({native: S(2)}) == Basic(S(2))
+        assert first != second
+        assert second != first
+
+
+def test_native_argument_equality_without_ordering():
+    for first, second in [(None, None), (1, 1 + 0j)]:
+        first, second = Basic(first), Basic(second)
+        assert first == second
+        assert first.compare(second) == second.compare(first) == 0
+        clear_cache()
+        first_key = first.sort_key()
+        clear_cache()
+        assert first_key == second.sort_key()
+
+
+def test_native_and_class_argument_identity():
+    class Value:
+        def __eq__(self, other):
+            return other is Symbol or isinstance(other, Value)
+
+        def __hash__(self):
+            return hash(Symbol)
+
+    first, second = Basic(Symbol), Basic(Value())
+    assert first.xreplace({Symbol: S(2)}) == Basic(S(2))
+    assert second.xreplace({Symbol: S(2)}) == second
+    assert first != second and second != first
+
+
 def test_subs_class_arguments():
     x, y = symbols('x y')
     f, g = Function('f'), Function('g')

@@ -424,6 +424,8 @@ class Basic(Printable):
         for l, r in zip(st, ot):
             if isinstance(l, Basic):
                 c = l.compare(r)
+            elif isinstance(r, Basic):
+                c = -r.compare(l)
             elif isinstance(l, type) or isinstance(r, type):
                 # Class-valued fields follow other fields consistently.
                 if not isinstance(l, type):
@@ -435,6 +437,8 @@ class Basic(Printable):
                 else:
                     lk, rk = default_sort_key(l), default_sort_key(r)
                     c = bool(lk > rk) - bool(lk < rk)
+            elif l == r:
+                c = 0
             elif isinstance(l, frozenset):
                 l = Basic(*l) if isinstance(l, frozenset) else l
                 r = Basic(*r) if isinstance(r, frozenset) else r
@@ -490,12 +494,12 @@ class Basic(Printable):
 
         # XXX: remove this when issue 5169 is fixed
         def inner_key(arg):
-            # The leading flag keeps classes after other argument values.
+            # The tag orders SymPy values, native values, then classes.
             if isinstance(arg, Basic):
-                return False, arg.sort_key(order)
+                return 0, arg.sort_key(order)
             if isinstance(arg, type):
-                return True, default_sort_key(arg, order=order)
-            return False, arg
+                return 2, default_sort_key(arg, order=order)
+            return 1, arg
 
         args = self._sorted_args
         args = len(args), tuple([inner_key(arg) for arg in args])
@@ -554,10 +558,15 @@ class Basic(Printable):
         a, b = self._hashable_content(), other._hashable_content()
         if a != b:
             return False
-        # check number *in* an expression
+        # Check argument kinds and numeric types within expressions.
         for a, b in zip(a, b):
             if not isinstance(a, Basic):
+                if (isinstance(b, Basic) or
+                        isinstance(a, type) != isinstance(b, type)):
+                    return False
                 continue
+            if not isinstance(b, Basic):
+                return False
             if a.is_Number and type(a) != type(b):
                 return False
         return True
