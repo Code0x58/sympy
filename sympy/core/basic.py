@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Iterable
+from decimal import Decimal
 from itertools import zip_longest
 from functools import cmp_to_key
+from numbers import Complex as ComplexABC
 from typing import TYPE_CHECKING, overload
 
 from .assumptions import _prepare_class_assumptions
@@ -374,6 +376,7 @@ class Basic(Printable):
         Return -1, 0, 1 if the object is less than, equal,
         or greater than other in a canonical sense.
         Non-Basic are always greater than Basic.
+        Native complex fields are ordered by real and imaginary parts.
         If both names of the classes being compared appear
         in the `ordering_of_classes` then the ordering will
         depend on the appearance of the names there.
@@ -449,6 +452,11 @@ class Basic(Printable):
                     l = Basic(*sorted(map(Basic, l), key=_args_sortkey))
                     r = Basic(*sorted(map(Basic, r), key=_args_sortkey))
                     c = l.compare(r)
+            elif ((isinstance(l, complex) or isinstance(r, complex))
+                    and isinstance(l, (ComplexABC, Decimal))
+                    and isinstance(r, (ComplexABC, Decimal))):
+                l, r = (l.real, l.imag), (r.real, r.imag)
+                c = (l > r) - (l < r)
             else:
                 c = (l > r) - (l < r)
             if c:

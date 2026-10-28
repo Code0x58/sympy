@@ -2,6 +2,8 @@
 of Basic or Atom."""
 from __future__ import annotations
 import collections
+from decimal import Decimal
+from fractions import Fraction
 from typing import TypeVar, Generic
 
 from sympy.assumptions.ask import Q
@@ -131,6 +133,35 @@ def test_compare_frozenset_and_native_arguments():
     for value in (None, 1, 1.0, 1 + 2j, False, 'f', (1,)):
         second = Basic(value)
         assert first.compare(second) == -second.compare(first) != 0
+
+
+def test_compare_frozenset_complex_arguments():
+    for convert in (int, float, Fraction, Decimal):
+        one = convert(1)
+        first = Basic(frozenset([one, 2j]))
+        second = Basic(frozenset([2j, one]))
+        lower = Basic(frozenset([0, 3j]))
+        upper = Basic(frozenset([one, 3j]))
+        assert first == second
+        assert first.compare(lower) == second.compare(lower) == 1
+        assert lower.compare(first) == -1
+        assert first.compare(upper) == second.compare(upper) == -1
+        assert upper.compare(first) == 1
+
+
+def test_native_complex_argument_ordering():
+    groups = [
+        (-2, -2 + 0j), (-2 + 1j,),
+        (False, 0, 0.0, 0j, Decimal(0), Fraction(0)), (1j,),
+        (Fraction(1, 2), Decimal('0.5'), 0.5, 0.5 + 0j),
+        (True, 1, 1.0, 1 + 0j, Decimal(1), Fraction(1)),
+        (1 + 2j,), (2, 2 + 0j),
+    ]
+    for i, left in enumerate(groups):
+        for j, right in enumerate(groups):
+            for a in left:
+                for b in right:
+                    assert Basic(a).compare(Basic(b)) == (i > j) - (i < j)
 
 
 def test_sort_key_class_and_native_arguments():
