@@ -499,6 +499,8 @@ class Function(Application, Expr):
         return False
 
     def __new__(cls, *args, **options) -> type[AppliedUndef]:  # type: ignore
+        if cls is Function and options.get('__dict__') is not None:
+            return UndefinedFunction(*args, **options)
         key = _function_metadata_key(options) if cls is Function else None
         return _new_function(key, cls, *args, **options)
 

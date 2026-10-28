@@ -1078,6 +1078,48 @@ def test_function_namespace_substitution_identity(method):
     assert second.doit() == function(1)
 
 
+@pytest.mark.parametrize('method', ['eval', 'doit'])
+def test_function_namespace_constructor(method):
+    def evaluate(cls, *args):
+        return S.One
+
+    def doit(self, **hints):
+        return S.One
+
+    handler = classmethod(evaluate) if method == 'eval' else doit
+    namespace = {method: handler}
+    first = Function('namespace_constructor', __dict__=namespace.copy())
+    second = Function('namespace_constructor', __dict__=namespace.copy())
+    assert first != second
+    assert first(x).doit() is S.One
+    assert second(x).doit() is S.One
+    if method == 'doit':
+        assert first(x).func is first
+        assert second(x).func is second
+
+
+def test_function_empty_namespace_constructor():
+    ordinary = Function('empty_namespace')
+    empty = Function('empty_namespace', __dict__={})
+    omitted = Function('empty_namespace', __dict__=None)
+    assert ordinary == empty == omitted
+    assert hash(ordinary) == hash(empty) == hash(omitted)
+    assert ordinary(x) == empty(x) == omitted(x)
+
+
+@pytest.mark.parametrize('namespace', [None, {}, {'tag': 'namespace'}])
+def test_function_namespace_metadata_types(namespace):
+    clear_cache()
+    first = Function('namespace_metadata', __dict__=namespace, value=(True,))
+    second = Function('namespace_metadata', __dict__=namespace, value=(1,))
+    assert first != second
+    assert first.value == (True,)
+    assert type(first.value[0]) is bool
+    assert type(second.value[0]) is int
+    assert first(x).func is first
+    assert second(x).func is second
+
+
 @pytest.mark.parametrize('name', ['key', 'metadata_key'])
 def test_function_metadata_keyword_names(name):
     first = Function('a', **{name: 1})
