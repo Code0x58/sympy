@@ -580,6 +580,8 @@ class Basic(Printable):
             return False
         # Check argument kinds and numeric types within expressions.
         for a, b in zip(a, b):
+            if a is b:
+                continue
             if not isinstance(a, Basic):
                 if (isinstance(b, Basic) or
                         isinstance(a, type) != isinstance(b, type)):
