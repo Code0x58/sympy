@@ -998,6 +998,8 @@ def test_function_numeric_metadata_cache(first_value, second_value):
 
 @pytest.mark.parametrize('native, symbolic', [
     (1, S.One), (True, S.true), ((1,), Tuple(1)),
+    (frozenset([1]), frozenset([S.One])),
+    (frozenset([frozenset([1])]), frozenset([frozenset([S.One])])),
 ])
 def test_function_basic_metadata_types(native, symbolic):
     clear_cache()
@@ -1006,6 +1008,31 @@ def test_function_basic_metadata_types(native, symbolic):
     assert first != second and second != first
     assert first(x).func is first
     assert second(x).func is second
+
+
+@pytest.mark.parametrize('base', [tuple, frozenset])
+@pytest.mark.parametrize('override', [False, True])
+def test_function_container_metaclass_equality(base, override):
+    class Meta(type):
+        def __getattribute__(cls, name):
+            if name == '__eq__':
+                return base.__eq__ if override else object.__eq__
+            return super().__getattribute__(name)
+
+    class Value(base, metaclass=Meta):
+        if override:
+            def __eq__(self, other):
+                return isinstance(other, Value)
+
+            def __hash__(self):
+                return 0
+
+    first = Function('container_metaclass_equality', value=Value([1]))
+    equivalent = Value([2]) if override else base([1])
+    second = Function('container_metaclass_equality', value=equivalent)
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first(x) == second(x)
 
 
 @pytest.mark.parametrize('implementation', [

@@ -111,6 +111,87 @@ def test_compare_frozenset_arguments():
             assert first.compare(other) == -other.compare(first)
 
 
+def test_frozenset_argument_kinds():
+    for native, symbolic in [(1, S.One), (1.0, Float(1)), (True, S.true)]:
+        for nested in (False, True):
+            left, right = frozenset([native]), frozenset([symbolic])
+            if nested:
+                left, right = frozenset([left]), frozenset([right])
+            first, second = Basic(left), Basic(right)
+            assert first != second
+            assert first.compare(second) == -second.compare(first) != 0
+
+
+def test_frozenset_native_numeric_equivalence():
+    for one in (1, True, 1.0, Fraction(1), Decimal(1)):
+        for nested in (False, True):
+            values = [frozenset(items) for items in ((1, 2), (one, 2), (0, 2), (1, 3))]
+            if nested:
+                values = [frozenset([value]) for value in values]
+            first, equivalent, lower, upper = map(Basic, values)
+            assert first == equivalent
+            assert hash(first) == hash(equivalent)
+            assert first.compare(equivalent) == 0
+            assert first.compare(lower) == equivalent.compare(lower) == 1
+            assert first.compare(upper) == equivalent.compare(upper) == -1
+
+
+def test_frozenset_argument_storage():
+    class StoredSet(frozenset):
+        def __iter__(self):
+            return iter([2])
+
+        def __len__(self):
+            raise TypeError('stored contents do not use overridden iteration or length')
+
+    first = Basic(StoredSet([1, 9]))
+    equivalent = Basic(frozenset([1, 9]))
+    other = Basic(frozenset([1, 8]))
+    assert first == equivalent
+    assert first.compare(equivalent) == 0
+    assert first.compare(other) == equivalent.compare(other) == 1
+
+
+def test_compare_equal_unordered_frozenset_arguments():
+    first = Basic(frozenset([None, 'a', 1j]))
+    second = Basic(frozenset([1j, 'a', None]))
+    assert first == second
+    assert first.compare(second) == second.compare(first) == 0
+
+
+def test_frozenset_custom_equality():
+    class EquivalentSet(frozenset):
+        def __eq__(self, other):
+            return isinstance(other, EquivalentSet)
+
+        def __hash__(self):
+            return 0
+
+    first, second = Basic(EquivalentSet([1])), Basic(EquivalentSet([2]))
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first.compare(second) == second.compare(first) == 0
+
+
+def test_frozenset_metaclass_equality_attribute():
+    class Meta(type):
+        def __getattribute__(cls, name):
+            if name == '__eq__':
+                return frozenset.__eq__
+            return super().__getattribute__(name)
+
+    class EquivalentSet(frozenset, metaclass=Meta):
+        def __eq__(self, other):
+            return isinstance(other, EquivalentSet)
+
+        def __hash__(self):
+            return 0
+
+    first, second = Basic(EquivalentSet([1])), Basic(EquivalentSet([2]))
+    assert first == second
+    assert first.compare(second) == second.compare(first) == 0
+
+
 def test_compare_frozenset_sort_key_ties():
     class CollidingSymbol(Symbol):
         def __hash__(self):

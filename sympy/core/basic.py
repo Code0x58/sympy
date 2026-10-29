@@ -5,6 +5,7 @@ from collections import Counter
 from collections.abc import Mapping, Iterable
 from decimal import Decimal
 from fractions import Fraction
+from inspect import getattr_static
 from itertools import zip_longest
 from functools import cmp_to_key
 from typing import TYPE_CHECKING, overload
@@ -44,6 +45,17 @@ def _is_standard_number(value):
     cls = type(value)
     return (cls is bool or cls is int or cls is float or cls is complex
             or cls is Decimal or cls is Fraction)
+
+
+def _has_builtin_equality(value, cls):
+    """Recognize containers that inherit the built-in equality operation."""
+    return isinstance(value, cls) and (type(value) is cls
+        or getattr_static(type(value), '__eq__') is cls.__eq__)
+
+
+def _frozenset_args(value):
+    """Apply Basic's argument identity to a frozenset's stored entries."""
+    return frozenset(map(Basic, frozenset.__iter__(value)))
 
 
 def _iterable_args(args):
@@ -454,7 +466,8 @@ class Basic(Printable):
                 else:
                     lk, rk = default_sort_key(l), default_sort_key(r)
                     c = bool(lk > rk) - bool(lk < rk)
-            elif l == r:
+            elif l == r and not (_has_builtin_equality(l, frozenset)
+                                 and _has_builtin_equality(r, frozenset)):
                 c = 0
             elif isinstance(l, frozenset) or isinstance(r, frozenset):
                 if not isinstance(l, frozenset):
@@ -463,9 +476,13 @@ class Basic(Printable):
                     c = -1
                 else:
                     # Wrapping entries gives native and class fields the same rules.
-                    l = Basic(*sorted(map(Basic, l), key=_args_sortkey))
-                    r = Basic(*sorted(map(Basic, r), key=_args_sortkey))
-                    c = l.compare(r)
+                    l, r = _frozenset_args(l), _frozenset_args(r)
+                    if l == r:
+                        c = 0
+                    else:
+                        l = Basic(*sorted(l, key=_args_sortkey))
+                        r = Basic(*sorted(r, key=_args_sortkey))
+                        c = l.compare(r)
             # NaNs must not acquire an order through their components.
             elif ((type(l) is complex or type(r) is complex)
                     and _is_standard_number(l) and _is_standard_number(r)
@@ -594,6 +611,10 @@ class Basic(Printable):
             if not isinstance(a, Basic):
                 if (isinstance(b, Basic) or
                         isinstance(a, type) != isinstance(b, type)):
+                    return False
+                if (isinstance(a, frozenset) and _has_builtin_equality(a, frozenset)
+                        and _has_builtin_equality(b, frozenset)
+                        and _frozenset_args(a) != _frozenset_args(b)):
                     return False
                 continue
             if not isinstance(b, Basic):
