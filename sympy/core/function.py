@@ -2954,16 +2954,10 @@ class Subs(Expr):
         return rv
 
     def _eval_as_leading_term(self, x, logx, cdir):
-        if x in self.point:
-            ipos = self.point.index(x)
-            xvar = self.variables[ipos]
-            return self.expr.as_leading_term(xvar)
-        if x in self.variables:
-            # if `x` is a dummy variable, it means it won't exist after the
-            # substitution has been performed:
-            return self
-        # The variable is independent of the substitution:
-        return self.expr.as_leading_term(x)
+        value = self.doit()
+        if value != self:
+            return value.as_leading_term(x, logx=logx, cdir=cdir)
+        return super()._eval_as_leading_term(x, logx=logx, cdir=cdir)
 
 
 def diff(f, *symbols, **kwargs):

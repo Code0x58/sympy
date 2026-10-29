@@ -2192,6 +2192,74 @@ def test_Subs_unused_targets_addition():
     assert (Subs(1, x, 1) + Subs(1, y, 2)).doit() == 2
 
 
+@pytest.mark.parametrize('source, variable, expected', [
+    (Subs(y, y, x), x, x),
+    (Subs(sin(y), y, x), x, x),
+    (Subs(y, y, x**2), x, x**2),
+    (Subs(y, y, 2*x), x, 2*x),
+    (Subs(y**2, y, x + y), y, x**2),
+    (Subs(1/y, y, 1/x), x, x),
+    (Subs((y - 1)**2 + 3*(y - 1)**3, y, 1 + x**2), x, x**4),
+    (Subs(x + y, (x, y), (y, z)), z, 2*z),
+    (Subs(x*y, (x, y), (y, z)), z, z**2),
+    (Subs(y - x, (x, y), (y, z)), z, S.Zero),
+    (Subs(f(y), y, x), x, f(x)),
+    (Subs(Integral(y, z), y, z), z, z**2),
+])
+def test_Subs_leading_term(source, variable, expected):
+    assert source.as_leading_term(variable) == expected
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, f])
+def test_Subs_leading_term_cache(wrap):
+    first, second = [Subs(wrap(variable), variable, x) for variable in (y, z)]
+    assert first == second
+    for sources in ((first, second), (second, first)):
+        clear_cache()
+        for source in sources:
+            result = source.as_leading_term(x)
+            assert result == wrap(x)
+            assert result.free_symbols == {x}
+
+
+def test_Subs_leading_term_evaluator_order():
+    class Named(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == y:
+                return S.Zero
+
+    source = Subs(Named(y, evaluate=False), y, x)
+    assert source.as_leading_term(x) == 0
+
+
+def test_Subs_unresolved_leading_term():
+    source = Subs(Derivative(f(y), y), y, x**2)
+    assert source.as_leading_term(x) == source
+
+    class Held(Subs):
+        def doit(self, **hints):
+            return self
+
+    source = Held(y, y, x)
+    result = source.as_leading_term(x)
+    assert type(result) is Held
+    assert result == source
+    assert result.free_symbols == {x}
+
+
+def test_Subs_leading_term_pole():
+    with raises(PoleError):
+        Subs(exp(y), y, 1/x).as_leading_term(x)
+
+
+@pytest.mark.parametrize('direction', [1, -1])
+def test_Subs_leading_term_context(direction):
+    logarithm = Symbol('L')
+    source = Subs(log(y), y, -x)
+    assert source.as_leading_term(x, logx=logarithm, cdir=direction) == logarithm + direction*I*pi
+
+
 def test_Subs_evaluation_introduces_target():
     class F(Function):
         @classmethod
