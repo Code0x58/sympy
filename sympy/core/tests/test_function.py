@@ -2187,6 +2187,110 @@ def test_Subs_deferred_derivative_dependencies():
     assert Subs(Derivative(y, x), (z, y), (x, z)).doit() == 0
 
 
+@pytest.mark.parametrize('body', [y, f(y)])
+@pytest.mark.parametrize('order', [0, 1, 2])
+def test_Subs_symbolic_derivative_order(body, order):
+    n = Symbol('n')
+    source = Subs(Derivative(body, (x, n)), n, order)
+    assert source.doit() == (body if order == 0 else 0)
+
+
+@pytest.mark.parametrize('order', [0, 1])
+def test_Subs_ordered_derivative_counts(order):
+    n, m = symbols('n m')
+    derivative = Derivative(f(y), (x, n))
+    first = Subs(derivative, (n, m), (m, order))
+    second = Subs(derivative, (m, n), (order, m))
+    assert first.doit() == (f(y) if order == 0 else 0)
+    assert second.doit() == Derivative(f(y), (x, m))
+
+
+@pytest.mark.parametrize('count, point', [(1 + t, -1), (2*t, 0)])
+def test_Subs_derivative_count_expression(count, point):
+    assert Subs(Derivative(f(y), (x, count)), t, point).doit() == f(y)
+
+
+@pytest.mark.parametrize('points, expected', [
+    ((0, 0), f(y)), ((0, 1), Derivative(f(y), y)), ((1, 0), S.Zero),
+])
+def test_Subs_multiple_derivative_counts(points, expected):
+    n, m = symbols('n m')
+    source = Subs(Derivative(f(y), (x, n), (y, m)), (n, m), points)
+    assert source.doit() == expected
+
+
+@pytest.mark.parametrize('body', [f(x), f(y)])
+@pytest.mark.parametrize('ordered', [False, True])
+def test_Subs_self_referential_derivative_count(body, ordered):
+    n, m = symbols('n m')
+    variables, points = ((n, m), (m, n + 1)) if ordered else ((n,), (n + 1,))
+    source = Subs(Derivative(body, (x, n)), variables, points)
+    assert source.doit() == Derivative(body, (x, n + 1)).doit()
+
+
+def test_Subs_fixed_derivative_count():
+    assert Subs(Derivative(f(y), x), 1, 0).doit() == 0
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, g])
+def test_Subs_derivative_count_cache(wrap):
+    n, m = symbols('n m')
+    first, second = [Subs(Derivative(f(y), (x, count)), count, 0) for count in (n, m)]
+    assert first == second
+    for sources in ((first, second), (second, first)):
+        clear_cache()
+        for source in sources:
+            result = wrap(source).doit()
+            assert result == wrap(f(y))
+            assert result.free_symbols == {y}
+
+
+@pytest.mark.parametrize('derivative, distinct_values', [
+    (Derivative(f(y), (x, x)), True), (Derivative(f(y), (f(x), x)), False),
+])
+@pytest.mark.parametrize('point', [t, Symbol('k', integer=True, nonnegative=True)])
+@pytest.mark.parametrize('wrap', [lambda value: value, g])
+def test_Subs_symbolic_order_variable_identity(derivative, distinct_values, point, wrap):
+    first = Subs(derivative, x, point)
+    second = Subs(derivative.xreplace({x: z}), z, point)
+    assert (first.doit() != second.doit()) == distinct_values
+    for sources in ((first, second), (second, first)):
+        clear_cache()
+        assert wrap(sources[0]) != wrap(sources[1])
+
+
+def test_Subs_derivative_class_variable_key():
+    first, second = [Subs(Derivative(f(y), (Symbol, count)), count, 1)
+                     for count in (x, z)]
+    assert first._comparison_key[0] and second._comparison_key[0]
+    assert first == second
+    assert hash(first) == hash(second)
+
+
+def test_Subs_invalid_derivative_count():
+    n = Symbol('n')
+    with raises(ValueError):
+        Subs(Derivative(f(y), (x, n)), n, -1).doit()
+
+
+@pytest.mark.parametrize('deep', [False, True])
+def test_Subs_zero_derivative_count_deep(deep):
+    n = Symbol('n')
+    source = Subs(Derivative(Integral(y, z), (x, n)), n, 0)
+    assert source.doit(deep=deep) == (y*z if deep else Integral(y, z))
+
+
+@pytest.mark.parametrize('operation, expected', [
+    (lambda source: source.diff(y), S.One),
+    (lambda source: source.as_leading_term(y), y),
+    (lambda source: source.series(y), y),
+])
+def test_Subs_derivative_count_operations(operation, expected):
+    n = Symbol('n')
+    source = Subs(Derivative(y, (x, n)), n, 0)
+    assert operation(source) == expected
+
+
 def test_Subs_unused_targets_addition():
     assert (Subs(1, x, 1) + Subs(1, x, 2)).doit() == 2
     assert (Subs(1, x, 1) + Subs(1, y, 2)).doit() == 2

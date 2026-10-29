@@ -2658,6 +2658,9 @@ class Subs(Expr):
                     elif D in expr.subs(vi, D).free_symbols:
                         expr = expr.diff((vi, ci))
                     else:
+                        # Symbolic orders are free parameters.
+                        if not ci.is_Integer:
+                            ci = ci.subs(undone)
                         wrt.append((vi, ci))
                 # inject remaining subs
                 rv = expr.subs(undone)
@@ -2754,6 +2757,7 @@ class Subs(Expr):
         free = self.expr.free_symbols
         if variables[0] not in free:
             return key
+        derivative_counts = []
         for node in iterargs(self.expr):
             if isinstance(node, type):
                 continue
@@ -2772,6 +2776,14 @@ class Subs(Expr):
                 return key
             if _get_postprocessors_for_type(type(node)):
                 return key
+            if type(node) is Derivative:
+                derivative_counts.extend(node.variable_count)
+
+        # Symbolic-order derivatives can retain their differentiation variables.
+        if any(not count.is_Integer and isinstance(variable, Basic)
+               and variables[0] in variable.free_symbols
+               for variable, count in derivative_counts):
+            return key
 
         normalization_symbol = next(numbered_symbols('_', exclude=free - set(variables)))
         normalized = self._xreplace_for_comparison(
