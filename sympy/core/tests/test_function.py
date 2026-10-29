@@ -1645,6 +1645,28 @@ def test_replace_equal_binding_structure(wrap, simultaneous, mapping):
     assert _aresame(result, wrap(replacement))
 
 
+@pytest.mark.parametrize('wrap', [lambda value: value, Basic, Tuple, g])
+@pytest.mark.parametrize('simultaneous', [False, True])
+def test_replace_rebuilds_equal_binding(wrap, simultaneous):
+    source = wrap(Subs(f(x), x, y))
+    clear_cache()
+    result = source.replace(x, z, simultaneous=simultaneous)
+    assert _aresame(result, wrap(Subs(f(z), z, y)))
+
+
+@pytest.mark.parametrize('source, value', [
+    (S.Zero, 0), (S.One, 1), (S.true, True), (S.false, False),
+    (Float(1), 1.0),
+])
+@pytest.mark.parametrize('mapping', [False, True])
+def test_replace_equivalent_native_scalar(source, value, mapping):
+    result = source.replace(lambda node: node == source, lambda node: value, map=mapping)
+    if mapping:
+        result, changes = result
+        assert changes == {}
+    assert result is source
+
+
 @pytest.mark.parametrize('variable', [x, z, Symbol('_0'), Dummy('bound')])
 @pytest.mark.parametrize('point', [S.Zero, y, x])
 def test_Subs_function_replacement_preserves_free_symbols(variable, point):

@@ -1949,8 +1949,9 @@ class Basic(Printable):
                 args = raw_args if isinstance(rv, Basic) else _iterable_args(raw_args)
                 if args:
                     newargs = tuple([walk(a, F) for a in args])
-                    if args != newargs or any(a is not b and not _aresame(a, b)
-                                              for a, b in zip(args, newargs)):
+                    if args != newargs or changed and any(
+                            a is not b and not _aresame(a, b)
+                            for a, b in zip(args, newargs)):
                         rv = rv.func(*newargs)
                         if simultaneous:
                             # if rv is something that was already
@@ -1964,14 +1965,18 @@ class Basic(Printable):
             return rv
 
         mapping = {}  # changes that took place
+        changed = False
 
         def rec_replace(expr):
+            nonlocal changed
             result = _query(expr)
             if result or result == {}:
                 v = _value(expr, result)
                 # Equal expressions can retain different bindings.
                 if (v is not None and v is not expr
-                        and (v != expr or not _aresame(v, expr))):
+                        and (v != expr or isinstance(v, Basic)
+                             and isinstance(expr, Basic) and not _aresame(v, expr))):
+                    changed = True
                     if map:
                         mapping[expr] = v
                     expr = v
