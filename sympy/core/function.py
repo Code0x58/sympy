@@ -2797,6 +2797,10 @@ class Subs(Expr):
                 return new if arg == old else arg
             return arg._subs(old, new)
 
+        def needs_mask(variables):
+            return (not isinstance(old, type) and old._has(iterargs, *variables)
+                    or not isinstance(new, type) and new._has(iterargs, Dummy, *variables))
+
         pt = list(self.point)
         if old in self.variables:
             # A neutral rename must preserve evaluation, domain, and free points.
@@ -2816,20 +2820,23 @@ class Subs(Expr):
         v = [subs(i) for i in self.variables]
         if v != list(self.variables):
             return self.func(self.expr, self.variables + (old,), pt + [new])
+        active = []
         if (all(type(variable) in (Symbol, Dummy) for variable in v)
                 and (len(v) == 1 or type(self) is Subs and not has_dups(v))):
-            free = set() if isinstance(self.expr, type) else self.expr.free_symbols
-            active = [(i, variable) for i, variable in enumerate(v) if variable in free]
-        else:
-            active = []
+            follow_points = len(v) > 1 and needs_mask(v)
+            free = set() if isinstance(self.expr, type) else set(self.expr.free_symbols)
+            for i, variable in enumerate(v):
+                if variable in free:
+                    active.append((i, variable))
+                    free.discard(variable)
+                    # An earlier point can introduce a later binding.
+                    if follow_points and i + 1 < len(v) and not isinstance(pt[i], type):
+                        free.update(pt[i].free_symbols)
         if (len(v) == 1 and active and not isinstance(old, type)
                 and v[0] in old.free_symbols):
             expr = self.expr
         elif (active and (
-                not isinstance(old, type)
-                and old._has(iterargs, *(variable for _, variable in active))
-                or not isinstance(new, type)
-                and new._has(iterargs, Dummy, *(variable for _, variable in active))
+                needs_mask([variable for _, variable in active])
                 or isinstance(old, FunctionClass) and callable(new)
                 and not _is_uninterpreted_function(new) and self._comparison_key[0])):
             if len(v) > 1:

@@ -1599,6 +1599,52 @@ def test_Subs_multiple_symbol_point_scope():
     assert result.free_symbols == {y}
 
 
+@pytest.mark.parametrize('variables, points', [
+    ((x, y), (y, 1)),
+    ((x, y, t), (y, t, 1)),
+    ((x, t, y), (t, y, 1)),
+])
+@pytest.mark.parametrize('simultaneous', [False, True])
+def test_Subs_binding_introduced_by_point_scope(variables, points, simultaneous):
+    source = Subs(f(x) + z, variables, points)
+    replacement = Add(*variables)
+    result = source.subs(z, replacement, simultaneous=simultaneous)
+    assert result.doit() == f(1) + replacement
+    assert result.free_symbols == set(variables)
+
+
+def test_Subs_binding_introduced_by_point_definition():
+    source = Subs(f(x), (x, y), (y, 1))
+    assert source.subs(f, Lambda(t, y*t)).doit() == y
+
+
+def test_Subs_unused_binding_remains_reactive():
+    source = Subs(x, (t, y), (y, 1))
+    assert source.subs(x, y).doit() == 1
+
+
+def test_Subs_unused_binding_preserves_active_names():
+    class Named(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == x:
+                return S.Zero
+
+    source = Subs(f(x) + z, (x, y), (0, 1))
+    assert source.subs(z, y).subs(f, Named).doit() == 1
+
+
+@pytest.mark.parametrize('count', [1, 2])
+def test_Subs_unrelated_replacement_does_not_inspect_points(count):
+    class Point(Expr):
+        @property
+        def free_symbols(self):
+            raise ValueError('point free symbols')
+
+    source = Subs(f(x), (x, y)[:count], (Point(), 1)[:count])
+    assert source.subs(z, t) == source
+
+
 def test_Subs_point_edit_preserves_evaluator_binding():
     class Named(Expr):
         def doit(self, **hints):
