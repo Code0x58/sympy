@@ -52,6 +52,95 @@ def test_frozenset_sort_key(order, nested, convert):
     assert sorted([first, other], key=key) == sorted([other, second], key=key)
 
 
+@pytest.mark.parametrize('lower, upper', [
+    (1, 1 + 2j), (1j, 1), (1 + 2j, 2),
+    (Decimal('0.5'), 0.5 + 1j), (Fraction(1, 2), 0.5 + 1j),
+    (frozenset([1, 2]), frozenset([2, 3])),
+    (frozenset([1]), frozenset([2])),
+    (frozenset([S.One]), frozenset([1])),
+    (frozenset([frozenset([1])]), frozenset([frozenset([2])])),
+])
+def test_native_argument_sort_keys(lower, upper):
+    first, second = Basic(lower), Basic(upper)
+    assert first.compare(second) == -1
+    for values in ([first, second], [second, first]):
+        clear_cache()
+        assert sorted(values, key=default_sort_key) == [first, second]
+    left, right = default_sort_key(first), default_sort_key(second)
+    assert left < right and left <= right and right > left and right >= left
+    assert not (left > right or left >= right or right < left or right <= left)
+
+
+@pytest.mark.parametrize('value, equivalent', [
+    (1 + 0j, 1), (0j, False), (0.5 + 0j, Fraction(1, 2)),
+    (frozenset([1]), frozenset([True])),
+])
+def test_native_argument_sort_key_reconstruction(value, equivalent):
+    first = default_sort_key(Basic(value))
+    clear_cache()
+    second = default_sort_key(Basic(equivalent))
+    restored = loads(dumps(first))
+    assert first == second == restored
+    assert hash(first) == hash(second) == hash(restored)
+    other = default_sort_key(Basic(2 + 1j) if isinstance(value, complex)
+                             else Basic(frozenset([2])))
+    assert first < other and second < other and restored < other
+
+
+@pytest.mark.parametrize('value, other', [
+    (complex('nan'), 1), (complex(0, float('nan')), 1),
+    (1j, float('nan')), (1j, Decimal('NaN')),
+])
+def test_native_argument_nan_sort_keys(value, other):
+    first = default_sort_key(Basic(value))
+    clear_cache()
+    assert first == default_sort_key(Basic(value))
+    second = default_sort_key(Basic(other))
+    assert first != second
+    with raises(TypeError):
+        assert first < second
+    with raises(TypeError):
+        assert second < first
+
+
+def test_native_argument_sort_key_storage():
+    class StoredSet(frozenset):
+        def __iter__(self):
+            return iter([2])
+
+    first = default_sort_key(Basic(StoredSet([1, 9])))
+    clear_cache()
+    second = default_sort_key(Basic(frozenset([1, 9])))
+    other = default_sort_key(Basic(frozenset([1, 8])))
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first > other and second > other
+
+
+@pytest.mark.parametrize('base, value', [(complex, 1j), (frozenset, [1])])
+def test_native_argument_sort_key_hooks(base, value):
+    class Tagged(base):
+        def __new__(cls, tag):
+            obj = super().__new__(cls, value)
+            obj.tag = tag
+            return obj
+
+        def __eq__(self, other):
+            return isinstance(other, Tagged) and self.tag == other.tag
+
+        def __hash__(self):
+            return hash(self.tag)
+
+        def __lt__(self, other):
+            return self.tag < other.tag
+
+        def __gt__(self, other):
+            return self.tag > other.tag
+
+    first, second = default_sort_key(Basic(Tagged(1))), default_sort_key(Basic(Tagged(2)))
+    assert first < second and second > first
+
+
 def test_class_sort_keys():
     for first, second in [
         (sin, cos),

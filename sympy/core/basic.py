@@ -555,6 +555,8 @@ class Basic(Printable):
                 return 0, arg.sort_key(order)
             if isinstance(arg, type):
                 return 2, default_sort_key(arg, order=order)
+            if type(arg) is complex or _has_builtin_equality(arg, frozenset):
+                return 1, _NativeSortKey(arg)
             return 1, arg
 
         args = self._sorted_args
@@ -2462,6 +2464,40 @@ class Basic(Printable):
         return True
 
 _aresame = Basic.is_same  # for sake of others importing this
+
+
+class _NativeSortKey:
+    """Order native fields with Basic's comparison, retaining native hashes."""
+    __slots__ = ('value',)
+
+    def __init__(self, value):
+        self.value = Basic(value)
+
+    @staticmethod
+    def _as_basic(other):
+        return other.value if isinstance(other, _NativeSortKey) else Basic(other)
+
+    def __eq__(self, other):
+        return self.value == self._as_basic(other)
+
+    def __hash__(self):
+        return hash(self.value.args[0])
+
+    def __lt__(self, other):
+        return self.value.compare(self._as_basic(other)) < 0
+
+    def __gt__(self, other):
+        return self.value.compare(self._as_basic(other)) > 0
+
+    def __le__(self, other):
+        return self == other or self < other
+
+    def __ge__(self, other):
+        return self == other or self > other
+
+    def __repr__(self):
+        return f'_NativeSortKey({self.value.args[0]!r})'
+
 
 # key used by Mul and Add to make canonical args
 _args_sortkey = cmp_to_key(Basic.compare)
