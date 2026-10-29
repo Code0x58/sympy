@@ -1582,6 +1582,69 @@ def test_Subs_ordered_free_symbols():
         assert canonical.doit() == source.doit()
 
 
+@pytest.mark.parametrize('variable, point, canonical', [
+    (x, y, Symbol('_0')), (x, x, Symbol('_0')),
+    (Symbol('_0'), Symbol('_0'), Symbol('_1')),
+    (x, Symbol('_0'), Symbol('_1')),
+    (Symbol('_0'), x, Symbol('_0')),
+    (y, y, Symbol('_0')),
+])
+def test_Subs_canonical_bound_structure(variable, point, canonical):
+    source = Subs(f(variable), variable, point)
+    result = source.as_dummy()
+    assert result.variables == (canonical,)
+    assert result.expr == f(canonical)
+    assert result.point == (point,)
+    assert result.free_symbols == {point}
+    assert result.doit() == source.doit()
+
+
+@pytest.mark.parametrize('point', [x, Symbol('_0')])
+@pytest.mark.parametrize('wrap', [lambda value: value, Tuple, g])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_Subs_free_query_cache(point, wrap, reverse):
+    clear_cache()
+    first = wrap(Subs(f(x), x, point))
+    clear_cache()
+    second = wrap(Subs(f(z), z, point))
+    assert first == second
+    sources = [first, second]
+    if reverse:
+        sources.reverse()
+    clear_cache()
+    for source in sources:
+        assert source.has_free(point)
+        assert source.has_xfree({point})
+        assert not source.has_free(f(x), f(z))
+        assert not source.has_xfree({f(x), f(z)})
+
+
+@pytest.mark.parametrize('constructor', [Integral, Sum, Product])
+def test_binding_canonical_names_preserve_free_occurrences(constructor):
+    variable, canonical = symbols('_0 _1')
+    source = constructor(variable, (variable, 1, variable))
+    assert source.canonical_variables == {variable: canonical}
+    assert source.has_free(variable)
+    assert source.has_xfree({variable})
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, Basic, Tuple, g])
+@pytest.mark.parametrize('simultaneous', [False, True])
+@pytest.mark.parametrize('mapping', [False, True])
+def test_replace_equal_binding_structure(wrap, simultaneous, mapping):
+    original = Subs(f(x), x, y)
+    replacement = Subs(f(z), z, y)
+    source = wrap(original)
+    clear_cache()
+    result = source.replace(lambda node: node == original,
+        lambda node: replacement, simultaneous=simultaneous, map=mapping)
+    if mapping:
+        result, changes = result
+        assert len(changes) == 1
+        assert changes[original] is replacement
+    assert _aresame(result, wrap(replacement))
+
+
 @pytest.mark.parametrize('variable', [x, z, Symbol('_0'), Dummy('bound')])
 @pytest.mark.parametrize('point', [S.Zero, y, x])
 def test_Subs_function_replacement_preserves_free_symbols(variable, point):

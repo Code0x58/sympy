@@ -968,13 +968,12 @@ class Basic(Printable):
             return {}
         dums = numbered_symbols('_')
         reps = {}
-        # watch out for free symbol that are not in bound symbols;
-        # those that are in bound symbols are about to get changed
+        # A symbol can have both bound and free occurrences.
 
         # XXX: free_symbols only returns particular kinds of expressions that
         # generally have a .name attribute. There is not a proper class/type
         # that represents this.
-        names = {i.name for i in self.free_symbols - set(bound)} # type: ignore
+        names = {i.name for i in self.free_symbols} # type: ignore
         for b in bound:
             d = next(dums)
             if b.is_Symbol:
@@ -1950,14 +1949,16 @@ class Basic(Printable):
                 args = raw_args if isinstance(rv, Basic) else _iterable_args(raw_args)
                 if args:
                     newargs = tuple([walk(a, F) for a in args])
-                    if args != newargs:
+                    if args != newargs or any(a is not b and not _aresame(a, b)
+                                              for a, b in zip(args, newargs)):
                         rv = rv.func(*newargs)
                         if simultaneous:
                             # if rv is something that was already
                             # matched (that was changed) then skip
                             # applying F again
                             for i, e in enumerate(args):
-                                if rv == e and e != newargs[i]:
+                                if (rv == e and e is not newargs[i]
+                                        and not _aresame(e, newargs[i])):
                                     return rv
                 rv = F(rv)
             return rv
@@ -1968,7 +1969,9 @@ class Basic(Printable):
             result = _query(expr)
             if result or result == {}:
                 v = _value(expr, result)
-                if v is not None and v != expr:
+                # Equal expressions can retain different bindings.
+                if (v is not None and v is not expr
+                        and (v != expr or not _aresame(v, expr))):
                     if map:
                         mapping[expr] = v
                     expr = v
