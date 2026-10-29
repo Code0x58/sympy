@@ -1573,6 +1573,89 @@ def test_Subs_expression_replacement_scope(source, old, new, expected, simultane
     assert source.subs(old, new, simultaneous=simultaneous).doit() == expected
 
 
+@pytest.mark.parametrize('variables, points', [
+    ((x, y), (0, 1)), ((y, x), (1, 0)),
+    ((x, y), (y, 1)), ((y, x), (x, 0)),
+])
+@pytest.mark.parametrize('simultaneous', [False, True])
+def test_Subs_multiple_symbol_replacement_scope(variables, points, simultaneous):
+    source = Subs(f(x, y) + z, variables, points)
+    result = source.subs(z, x + y, simultaneous=simultaneous)
+    assert result.doit() == source.doit().subs(z, x + y)
+    assert result.free_symbols == {x, y}
+
+
+def test_Subs_multiple_symbol_function_scope():
+    source = Subs(f(x, y), (x, y), (0, 1))
+    definition = Lambda((z, t), x*z + y*t)
+    assert source.subs(f, definition).doit() == y
+    assert source.subs(f(x, y), z).doit() == f(0, 1)
+
+
+def test_Subs_multiple_symbol_point_scope():
+    source = Subs(f(x, y), (x, y), (z, 1))
+    result = source.subs(z, y)
+    assert result.doit() == f(y, 1)
+    assert result.free_symbols == {y}
+
+
+def test_Subs_point_edit_preserves_evaluator_binding():
+    class Named(Expr):
+        def doit(self, **hints):
+            return S.Zero if self.args == (x,) else S.One
+
+    source = Subs(Named(x), x, z)
+    assert source.subs(z, x).doit() == 0
+
+
+def test_Subs_multiple_symbols_preserve_opaque_evaluator():
+    class Named(Expr):
+        def doit(self, **hints):
+            return S.Zero if self.args == (x,) else S.One
+
+    class Zero(Expr):
+        def doit(self, **hints):
+            return S.Zero
+
+    source = Subs(Named(x) + z, (x, y), (0, 1))
+    assert source.subs(z, Zero(x)).doit() == 0
+
+
+def test_Subs_multiple_symbols_preserve_definition_evaluator():
+    class DetectDummy(Expr):
+        def doit(self, **hints):
+            return S.Zero if self.args[0].is_Dummy else S.One
+
+    source = Subs(f(x, y), (x, y), (0, 1))
+    definition = Lambda((z, t), DetectDummy(z) + x*z)
+    assert source.subs(f, definition).doit() == 1
+
+
+def test_Subs_multiple_symbols_preserve_point_hooks():
+    class Point(Expr):
+        def _eval_subs(self, old, new):
+            if old == y:
+                return S.Zero
+            if isinstance(old, Dummy):
+                return S.One
+
+    class Zero(Expr):
+        def doit(self, **hints):
+            return S.Zero
+
+    source = Subs(f(x, y) + z, (x, y), (Point(y), 1))
+    assert source.subs(z, Zero(x)).doit() == f(0, 1)
+
+
+def test_Subs_multiple_symbol_scope_context():
+    source = Subs(f(x, y) + z, (x, y), (y, 1))
+    for context in (evaluate(False), distribute(False), _exp_is_pow(True)):
+        clear_cache()
+        with context:
+            result = source.subs(z, x + y)
+        assert result.doit() == f(1, 1) + x + y
+
+
 def test_Subs_capture_avoidance_preserves_assumptions():
     positive = Symbol('p', positive=True)
     source = Subs(sign(positive, evaluate=False)*f(positive), positive, y)

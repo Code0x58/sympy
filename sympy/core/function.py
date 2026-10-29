@@ -2793,31 +2793,64 @@ class Subs(Expr):
         v = [subs(i) for i in self.variables]
         if v != list(self.variables):
             return self.func(self.expr, self.variables + (old,), pt + [new])
-        variable = (v[0] if len(v) == 1 and type(v[0]) in (Symbol, Dummy)
-                    and v[0] in self.expr.free_symbols else None)
-        if (variable is not None and not isinstance(old, type)
-                and variable in old.free_symbols):
+        if (all(type(variable) in (Symbol, Dummy) for variable in v)
+                and (len(v) == 1 or type(self) is Subs and not has_dups(v))):
+            free = set() if isinstance(self.expr, type) else self.expr.free_symbols
+            active = [(i, variable) for i, variable in enumerate(v) if variable in free]
+        else:
+            active = []
+        if (len(v) == 1 and active and not isinstance(old, type)
+                and v[0] in old.free_symbols):
             expr = self.expr
-        elif (variable is not None and (
-                not isinstance(old, type) and old._has(iterargs, variable)
-                or not isinstance(new, type) and new._has(iterargs, variable, Dummy)
+        elif (active and (
+                not isinstance(old, type)
+                and old._has(iterargs, *(variable for _, variable in active))
+                or not isinstance(new, type)
+                and new._has(iterargs, Dummy, *(variable for _, variable in active))
                 or isinstance(old, FunctionClass) and callable(new)
                 and not _is_uninterpreted_function(new) and self._comparison_key[0])):
-            # Keep nested bindings intact while masking this bound name.
-            # Dummies can carry deferred simultaneous replacements.
-            dummy = Dummy(variable.name, **variable.assumptions0)
-            rule = {variable: dummy}
-            rule.update((node, node) for node in iterargs(self.expr)
-                if not isinstance(node, type)
-                and variable in getattr(node, 'bound_symbols', ())
-                and variable not in node.free_symbols)
-            with evaluate(False):
-                masked = self.expr.xreplace(rule)
+            if len(v) > 1:
+                # Reuse the reversible-renaming proof for each affected scope.
+                safe = all(Subs(arg, variable, S.One)._comparison_key[0]
+                           for i, variable in active
+                           for arg in (self.expr, *pt[:i])
+                           if not isinstance(arg, type) and arg._has(iterargs, variable))
+                if safe and isinstance(old, FunctionClass) and isinstance(new, Lambda):
+                    safe = all(Subs(new.expr, variable, S.One)._comparison_key[0]
+                               for variable in new.variables
+                               if new.expr._has(iterargs, variable))
+                if not safe:
+                    return self.func(subs(self.expr), v, [subs(point) for point in pt])
+            dummies = {variable: Dummy(variable.name, **variable.assumptions0)
+                       for _, variable in active}
+
+            def mask(arg, start):
+                if isinstance(arg, type):
+                    return arg
+                for i, variable in active:
+                    if i < start:
+                        continue
+                    rule = {variable: dummies[variable]}
+                    # Locally bound occurrences belong to their own node.
+                    rule.update((node, node) for node in iterargs(arg)
+                        if not isinstance(node, type)
+                        and variable in getattr(node, 'bound_symbols', ())
+                        and variable not in node.free_symbols)
+                    with evaluate(False):
+                        arg = arg.xreplace(rule)
+                return arg
+
+            masked = mask(self.expr, 0)
+            # Earlier points are within the scope of later symbol bindings.
+            masked_points = [mask(point, i + 1) for i, point in enumerate(pt)]
             expr = subs(masked)
-            if expr != masked:
-                v = [dummy]
-            else:
-                expr = self.expr
+            pt = [subs(point) for point in masked_points]
+            if len(v) == 1 and expr == masked:
+                return self.func(self.expr, v, pt)
+            if expr == masked and pt == masked_points:
+                return self
+            v = [dummies.get(variable, variable) for variable in v]
+            return self.func(expr, v, pt)
         else:
             expr = subs(self.expr)
         pt = [subs(i) for i in self.point]
