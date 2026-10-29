@@ -388,7 +388,7 @@ class Basic(Printable):
         Return -1, 0, 1 if the object is less than, equal,
         or greater than other in a canonical sense.
         Non-Basic are always greater than Basic.
-        Native complex fields are ordered by real and imaginary parts.
+        Native complex fields without NaNs are ordered by real and imaginary parts.
         If both names of the classes being compared appear
         in the `ordering_of_classes` then the ordering will
         depend on the appearance of the names there.
@@ -437,6 +437,8 @@ class Basic(Printable):
         if c:
             return c
         for l, r in zip(st, ot):
+            if l is r:
+                continue
             if isinstance(l, Basic):
                 c = l.compare(r)
             elif isinstance(r, Basic):
@@ -464,8 +466,10 @@ class Basic(Printable):
                     l = Basic(*sorted(map(Basic, l), key=_args_sortkey))
                     r = Basic(*sorted(map(Basic, r), key=_args_sortkey))
                     c = l.compare(r)
+            # NaNs must not acquire an order through their components.
             elif ((type(l) is complex or type(r) is complex)
-                    and _is_standard_number(l) and _is_standard_number(r)):
+                    and _is_standard_number(l) and _is_standard_number(r)
+                    and l == l and r == r):
                 l, r = (l.real, l.imag), (r.real, r.imag)
                 c = (l > r) - (l < r)
             else:

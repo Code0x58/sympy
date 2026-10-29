@@ -164,6 +164,30 @@ def test_native_complex_argument_ordering():
                     assert Basic(a).compare(Basic(b)) == (i > j) - (i < j)
 
 
+def test_native_complex_nan_ordering():
+    for left, right in [
+        (complex('nan'), 1),
+        (complex(0, float('nan')), 0),
+        (complex('nan'), 1j),
+        (complex(0, float('nan')), 1j),
+        (1j, float('nan')),
+        (1j, Decimal('NaN')),
+    ]:
+        with raises(TypeError):
+            Basic(left).compare(Basic(right))
+        with raises(TypeError):
+            Basic(right).compare(Basic(left))
+
+
+def test_compare_shared_native_nan():
+    for constructor in (float, complex, Decimal):
+        value = constructor('nan')
+        first, second = Basic(value), Basic(value)
+        assert first == second
+        assert first.compare(second) == second.compare(first) == 0
+        assert Basic(value, 0).compare(Basic(value, 1)) == -1
+
+
 def test_native_complex_subclass_ordering():
     class TaggedComplex(complex):
         def __new__(cls, value, tag):
