@@ -739,6 +739,45 @@ def test_Subs_deferred_function_chain(order):
     assert expected.doit() == expected
 
 
+@pytest.mark.parametrize('source', [
+    Subs(Derivative(f(x), x), x, 0),
+    Subs(Derivative(f(x), x), f, Lambda(t, x*t)),
+])
+@pytest.mark.parametrize('precision', [2, 50])
+@pytest.mark.parametrize('method', ['evalf', 'n'])
+def test_Subs_unresolved_evalf(source, precision, method):
+    assert getattr(source, method)(precision) == source
+
+
+@pytest.mark.parametrize('method', ['evalf', 'n'])
+def test_Subs_numeric_evalf_hook(method):
+    class NumericSubs(Subs):
+        def doit(self, **hints):
+            return self
+
+        def _eval_evalf(self, prec):
+            return pi._evalf(prec)
+
+    source = NumericSubs(f(x), x, 0)
+    assert getattr(source, method)(50) == pi.evalf(50)
+
+
+@pytest.mark.parametrize('precision', [15, 50])
+@pytest.mark.parametrize('method', ['evalf', 'n'])
+def test_Subs_evalf_precision(precision, method):
+    source = Subs(x + y - z, t, 0)
+    result = getattr(source, method)(precision, subs={x: 10**100, y: 1, z: 10**100})
+    assert result == Float(1, precision)
+
+
+@pytest.mark.parametrize('method', ['evalf', 'n'])
+def test_Subs_evalf_options(method):
+    source = Subs(Derivative(f(x), x), x, 0)
+    assert getattr(source, method)(50, subs={source: pi}) == pi.evalf(50)
+    with raises(TypeError, match='subs must be given as a dictionary'):
+        getattr(source, method)(subs=[(x, 1)])
+
+
 def test_Subs_bound_placeholder_identity():
     variable = Symbol('_1')
     first = Subs(f(variable, x), (variable, x), (1, 0))

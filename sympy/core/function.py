@@ -2684,7 +2684,10 @@ class Subs(Expr):
         return rv
 
     def evalf(self, prec=None, **options):
-        return self.doit().evalf(prec, **options)
+        value = self.doit()
+        if value == self:
+            return super().evalf(prec, **options)
+        return value.evalf(prec, **options)
 
     n = evalf  # type:ignore
 
