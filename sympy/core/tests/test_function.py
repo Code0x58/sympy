@@ -1647,6 +1647,35 @@ def test_Subs_multiple_symbols_preserve_point_hooks():
     assert source.subs(z, Zero(x)).doit() == f(0, 1)
 
 
+def test_Subs_multiple_symbols_preserve_replacement_hooks():
+    class Replacement(Expr):
+        def _eval_subs(self, old, new):
+            if isinstance(old, Dummy):
+                return S.One
+
+    source = Subs(f(x, y), (x, y), (z, 1))
+    replacement = Replacement(x)
+    assert source.subs(z, replacement).doit() == f(replacement, 1)
+
+
+def test_Subs_multiple_symbols_preserve_lambda_subclass():
+    class Definition(Lambda):
+        def __call__(self, *args):
+            if any(arg.is_Dummy for arg in args):
+                return S.One
+            return super().__call__(*args)
+
+    source = Subs(f(x, y), (x, y), (0, 1))
+    definition = Definition((z, t), x*z)
+    assert source.subs(f, definition).doit() == 0
+
+
+def test_Subs_multiple_symbols_preserve_binding_domain():
+    point = Symbol('A', commutative=False)
+    source = Subs(f(x, y) + z, (x, y), (point, 1))
+    assert source.subs(z, x).doit() == f(point, 1) + point
+
+
 def test_Subs_multiple_symbol_scope_context():
     source = Subs(f(x, y) + z, (x, y), (y, 1))
     for context in (evaluate(False), distribute(False), _exp_is_pow(True)):
@@ -1734,6 +1763,32 @@ def test_Subs_standard_atomic_behavior(atom):
     first, second = Subs(Tuple(f(x), atom), x, 0), Subs(Tuple(f(z), atom), z, 0)
     assert first == second
     assert hash(first) == hash(second)
+
+
+def test_Subs_atomic_power_hook_identity():
+    class NamedPower(AtomicExpr):
+        def _eval_power(self, exponent):
+            if exponent == x:
+                return S.Zero
+
+    atom = NamedPower()
+    first = Subs(Pow(atom, x, evaluate=False), x, 1)
+    second = Subs(Pow(atom, z, evaluate=False), z, 1)
+    assert first.doit() == 0
+    assert second.doit() == atom
+    assert first != second
+    assert (first - second).doit() == -atom
+
+
+def test_Subs_multiple_symbols_preserve_atom_operators():
+    class NamedPower(AtomicExpr):
+        def _eval_power(self, exponent):
+            if exponent.is_Dummy:
+                return S.Zero
+
+    atom = NamedPower()
+    source = Subs(atom**x + y + z, (x, y), (2, 1))
+    assert source.subs(z, x).doit() == atom**2 + 3
 
 
 def test_Subs_scope_mask_preserves_held_expression():

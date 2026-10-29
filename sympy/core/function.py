@@ -1164,6 +1164,18 @@ def _is_uninterpreted_function(cls):
 @cacheit
 def _has_standard_atom_hooks(cls):
     """Recognize atoms whose hooks preserve an ordinary bound symbol."""
+    modules = (Atom.__module__, AtomicExpr.__module__, Number.__module__,
+               Symbol.__module__, 'sympy.logic.boolalg')
+    # Custom operators can inspect bound names through rebuilt parents.
+    for base in cls.__mro__:
+        module = inspect.getmodule(base)
+        if (module is not None and module.__name__ in modules
+                and module.__dict__.get(base.__name__) is base):
+            break
+        if any(callable(value) or hasattr(type(value), '__get__')
+               for name, value in base.__dict__.items()
+               if name not in ('__dict__', '__weakref__')):
+            return False
     methods = (
         ('doit', Atom.doit),
         ('_subs', Basic._subs),
@@ -2810,16 +2822,17 @@ class Subs(Expr):
                 or isinstance(old, FunctionClass) and callable(new)
                 and not _is_uninterpreted_function(new) and self._comparison_key[0])):
             if len(v) > 1:
-                # Include the binder so the proof checks hooks even in scopes
-                # where the symbol is absent.
-                safe = all(Subs(Tuple(arg, variable, sympify=False),
-                                variable, S.One)._comparison_key[0]
-                           for i, variable in active
-                           for arg in (self.expr, *pt[:i]))
-                if safe and isinstance(old, FunctionClass) and isinstance(new, Lambda):
-                    safe = all(Subs(Tuple(new.expr, variable, sympify=False),
-                                    variable, S.One)._comparison_key[0]
-                               for variable in new.variables)
+                def can_rename(variable, *args, point=S.One):
+                    # The extra occurrence makes the proof inspect all hooks.
+                    request = Subs(Tuple(*args, variable, sympify=False), variable, point)
+                    return request._comparison_key[0]
+
+                replacement = new.expr if type(new) is Lambda else new
+                safe = all(can_rename(variable, self.expr, *pt[:i], old, replacement,
+                                      point=self.point[i])
+                           for i, variable in active)
+                if safe and type(new) is Lambda:
+                    safe = all(can_rename(variable, replacement) for variable in new.variables)
                 if not safe:
                     return self.func(subs(self.expr), v, [subs(point) for point in pt])
             dummies = {variable: Dummy(variable.name, **variable.assumptions0)
