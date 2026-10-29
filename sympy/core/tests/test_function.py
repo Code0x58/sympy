@@ -1643,7 +1643,7 @@ def test_Subs_multiple_symbols_preserve_point_hooks():
         def doit(self, **hints):
             return S.Zero
 
-    source = Subs(f(x, y) + z, (x, y), (Point(y), 1))
+    source = Subs(f(x, y) + z, (x, y), (Point(x), 1))
     assert source.subs(z, Zero(x)).doit() == f(0, 1)
 
 

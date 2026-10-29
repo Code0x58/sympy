@@ -2810,15 +2810,16 @@ class Subs(Expr):
                 or isinstance(old, FunctionClass) and callable(new)
                 and not _is_uninterpreted_function(new) and self._comparison_key[0])):
             if len(v) > 1:
-                # Reuse the reversible-renaming proof for each affected scope.
-                safe = all(Subs(arg, variable, S.One)._comparison_key[0]
+                # Include the binder so the proof checks hooks even in scopes
+                # where the symbol is absent.
+                safe = all(Subs(Tuple(arg, variable, sympify=False),
+                                variable, S.One)._comparison_key[0]
                            for i, variable in active
-                           for arg in (self.expr, *pt[:i])
-                           if not isinstance(arg, type) and arg._has(iterargs, variable))
+                           for arg in (self.expr, *pt[:i]))
                 if safe and isinstance(old, FunctionClass) and isinstance(new, Lambda):
-                    safe = all(Subs(new.expr, variable, S.One)._comparison_key[0]
-                               for variable in new.variables
-                               if new.expr._has(iterargs, variable))
+                    safe = all(Subs(Tuple(new.expr, variable, sympify=False),
+                                    variable, S.One)._comparison_key[0]
+                               for variable in new.variables)
                 if not safe:
                     return self.func(subs(self.expr), v, [subs(point) for point in pt])
             dummies = {variable: Dummy(variable.name, **variable.assumptions0)
