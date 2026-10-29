@@ -711,6 +711,34 @@ def test_Subs_derivative_reordering_progress():
     assert result.doit() == result
 
 
+@pytest.mark.parametrize('body', [f(x), f(x) + 1])
+@pytest.mark.parametrize('order', [S.One, y])
+@pytest.mark.parametrize('deep', [False, True])
+def test_Subs_deferred_function_progress(body, order, deep):
+    source = Subs(Derivative(body, (x, order)), f, Lambda(t, x*t))
+    assert source.doit(deep=deep) == source
+
+
+@pytest.mark.parametrize('body', [f(x), f(x) + 1])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_Subs_deferred_function_zero_order(body, reverse):
+    replacements = [(f, Lambda(t, x*t)), (y, S.Zero)]
+    if reverse:
+        replacements.reverse()
+    variables, points = zip(*replacements)
+    source = Subs(Derivative(body, (x, y)), variables, points)
+    assert source.doit() == body.subs(f, Lambda(t, x*t))
+
+
+@pytest.mark.parametrize('order', [S.One, y])
+def test_Subs_deferred_function_chain(order):
+    definition = Lambda(t, x*t)
+    source = Subs(Derivative(f(x), (x, order)), (f, g), (g, definition))
+    expected = Subs(Derivative(g(x), (x, order)), g, definition)
+    assert source.doit() == expected
+    assert expected.doit() == expected
+
+
 def test_Subs_bound_placeholder_identity():
     variable = Symbol('_1')
     first = Subs(f(variable, x), (variable, x), (1, 0))

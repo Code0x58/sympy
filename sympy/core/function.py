@@ -2634,6 +2634,8 @@ class Subs(Expr):
                 else:
                     undone.append((vi, pi))
             if not isinstance(e, Derivative):
+                if e == self:
+                    return self
                 e = e.doit()
             if isinstance(e, Derivative):
                 # Apply substitutions that do not affect differentiation first.
