@@ -1676,6 +1676,12 @@ def test_Subs_multiple_symbols_preserve_binding_domain():
     assert source.subs(z, x).doit() == f(point, 1) + point
 
 
+def test_Subs_multiple_symbols_preserve_dependent_domain():
+    a, b = symbols('A B', commutative=False)
+    source = Subs(x*z, (x, y), (y, b))
+    assert source.subs(z, a*x).doit() == b**2*a
+
+
 def test_Subs_multiple_symbol_scope_context():
     source = Subs(f(x, y) + z, (x, y), (y, 1))
     for context in (evaluate(False), distribute(False), _exp_is_pow(True)):
@@ -1789,6 +1795,47 @@ def test_Subs_multiple_symbols_preserve_atom_operators():
     atom = NamedPower()
     source = Subs(atom**x + y + z, (x, y), (2, 1))
     assert source.subs(z, x).doit() == atom**2 + 3
+
+
+@pytest.mark.parametrize('kind', ['atom', 'function', 'metaclass'])
+@pytest.mark.thread_unsafe(reason='changes constructor postprocessors')
+def test_Subs_constructor_postprocessor_identity(kind):
+    def process(expr):
+        return S.Zero if expr.exp == x else expr
+
+    mapping = {'Pow': [process]}
+    if kind == 'atom':
+        class Postprocessed(AtomicExpr):
+            _constructor_postprocessor_mapping = mapping
+        value = Postprocessed()
+    elif kind == 'function':
+        class Postprocessed(Function):
+            _constructor_postprocessor_mapping = mapping
+        value = Postprocessed(y)
+    else:
+        class Meta(type):
+            @property
+            def _constructor_postprocessor_mapping(cls):
+                return mapping
+
+        class Postprocessed(AtomicExpr, metaclass=Meta):
+            pass
+        value = Postprocessed()
+
+    cls = type(value)
+    Basic._constructor_postprocessor_mapping[cls] = mapping
+    clear_cache()
+    try:
+        first_expr = Expr.__new__(Pow, value, x)
+        second_expr = Expr.__new__(Pow, value, z)
+        first_expr.is_commutative = second_expr.is_commutative = value.is_commutative
+        first, second = Subs(first_expr, x, 1), Subs(second_expr, z, 1)
+        assert first.doit() == 0
+        assert second.doit() == value
+        assert first != second
+    finally:
+        del Basic._constructor_postprocessor_mapping[cls]
+        clear_cache()
 
 
 def test_Subs_scope_mask_preserves_held_expression():

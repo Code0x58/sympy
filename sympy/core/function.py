@@ -43,7 +43,8 @@ from weakref import ref, WeakValueDictionary
 
 from .add import Add
 from .assumptions import _assume_defined
-from .basic import Atom, Basic, _atomic, _is_standard_number
+from .basic import (Atom, Basic, _atomic, _is_standard_number,
+                    _get_postprocessors_for_type)
 from .cache import cacheit, cached_property
 from .containers import Tuple, Dict
 from .decorators import _sympifyit
@@ -55,7 +56,7 @@ from .numbers import Rational, Float, Integer, Number, Infinity, NegativeInfinit
 from .operations import LatticeOp
 from .parameters import global_parameters, evaluate, distribute, _exp_is_pow
 from .rules import Transform
-from .singleton import S
+from .singleton import S, Singleton
 from .sympify import sympify, _sympify
 from .traversal import iterargs
 
@@ -1148,12 +1149,14 @@ def _is_uninterpreted_function(cls):
     """Recognize functions without user-supplied evaluation behavior."""
     if type(cls) is UndefinedFunction:
         return (cls._is_factory
-                and not (cls._kwargs.keys() - _assume_defined - {'nargs'}))
+                and not (cls._kwargs.keys() - _assume_defined - {'nargs'})
+                and not _get_postprocessors_for_type(cls))
     if type(cls) is not FunctionClass or not issubclass(cls, Function):
         return False
     for base in cls.__mro__:
         if base is Function:
-            return True
+            return (inspect.getattr_static(cls, 'mro') is type.mro
+                    and not _get_postprocessors_for_type(cls))
         if any(callable(value) or hasattr(value, '__get__')
                for name, value in base.__dict__.items()
                if name not in ('__dict__', '__weakref__')):
@@ -1164,11 +1167,15 @@ def _is_uninterpreted_function(cls):
 @cacheit
 def _has_standard_atom_hooks(cls):
     """Recognize atoms whose hooks preserve an ordinary bound symbol."""
+    if inspect.getattr_static(cls, 'mro') is not type.mro:
+        return False
     modules = (Atom.__module__, AtomicExpr.__module__, Number.__module__,
                Symbol.__module__, 'sympy.logic.boolalg')
     # Custom operators can inspect bound names through rebuilt parents.
     for base in cls.__mro__:
-        module = inspect.getmodule(base)
+        module_name = base.__dict__.get('__module__')
+        module = (inspect.getmodule(base)
+                  if type(module_name) is str and module_name in modules else None)
         if (module is not None and module.__name__ in modules
                 and module.__dict__.get(base.__name__) is base):
             break
@@ -2743,10 +2750,14 @@ class Subs(Expr):
                 if not _is_uninterpreted_function(node.func):
                     return key
             elif isinstance(node, Atom):
-                if node.args or not _has_standard_atom_hooks(type(node)):
+                cls = type(node)
+                if ((type(cls) is not type and type(cls) is not Singleton)
+                        or node.args or not _has_standard_atom_hooks(cls)):
                     return key
             elif type(node) not in (Basic, Expr, Add, Mul, Pow, Derivative,
                                    Tuple, Dict, Integral):
+                return key
+            if _get_postprocessors_for_type(type(node)):
                 return key
 
         normalization_symbol = next(numbered_symbols('_', exclude=free - set(variables)))
@@ -2828,11 +2839,12 @@ class Subs(Expr):
                     return request._comparison_key[0]
 
                 replacement = new.expr if type(new) is Lambda else new
-                safe = all(can_rename(variable, self.expr, *pt[:i], old, replacement,
+                safe = all(can_rename(variable, self.expr, *pt, old, replacement,
                                       point=self.point[i])
-                           for i, variable in active)
+                           for i, variable in enumerate(v))
                 if safe and type(new) is Lambda:
-                    safe = all(can_rename(variable, replacement) for variable in new.variables)
+                    safe = (not _get_postprocessors_for_type(Lambda)
+                            and all(can_rename(variable, replacement) for variable in new.variables))
                 if not safe:
                     return self.func(subs(self.expr), v, [subs(point) for point in pt])
             dummies = {variable: Dummy(variable.name, **variable.assumptions0)
