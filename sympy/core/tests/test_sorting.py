@@ -5,6 +5,7 @@ import os
 from decimal import Decimal
 from fractions import Fraction
 from functools import partial
+from itertools import permutations
 from pickle import dumps, loads
 from threading import Event, Thread
 from weakref import ref
@@ -137,8 +138,100 @@ def test_native_argument_sort_key_hooks(base, value):
         def __gt__(self, other):
             return self.tag > other.tag
 
-    first, second = default_sort_key(Basic(Tagged(1))), default_sort_key(Basic(Tagged(2)))
-    assert first < second and second > first
+    first, second = Basic(Tagged(1)), Basic(Tagged(2))
+    assert first.compare(second) == -1
+    assert second.compare(first) == 1
+    assert default_sort_key(first) < default_sort_key(second)
+
+
+@pytest.mark.parametrize('native, symbolic', [(1, S.One), (1.0, Float(1))])
+@pytest.mark.parametrize('nested', [False, True])
+@pytest.mark.parametrize('protocol', ['subclass', 'proxy'])
+@pytest.mark.parametrize('wrap', [lambda value: value,
+    lambda value: Function('protocol_field', value=value)])
+def test_frozenset_field_protocol_identity(native, symbolic, nested, protocol, wrap):
+    class ForwardSet(frozenset):
+        def __eq__(self, other):
+            if type(other) not in (ForwardSet, frozenset):
+                return NotImplemented
+            return super().__eq__(other)
+
+        __hash__ = frozenset.__hash__
+
+    class SetValue:
+        def __init__(self, values):
+            self.values = frozenset(values)
+
+        def __eq__(self, other):
+            if isinstance(other, SetValue):
+                other = other.values
+            if type(other) is frozenset:
+                return self.values == other
+            return NotImplemented
+
+        def __hash__(self):
+            return hash(self.values)
+
+    constructor = ForwardSet if protocol == 'subclass' else SetValue
+    values = [frozenset([native]), constructor([native]),
+              frozenset([symbolic]), constructor([symbolic])]
+    if nested:
+        values = [frozenset([value]) for value in values]
+    fields = list(map(Basic, values))
+    groups = (0, 1, 2, 1)
+    for indices in permutations(range(4)):
+        clear_cache()
+        items = [wrap(fields[i]) for i in indices]
+        expressions = [item if isinstance(item, Basic) else item(x) for item in items]
+        keys = []
+        for item in items:
+            clear_cache()
+            keys.append(default_sort_key(item))
+        for i, left in enumerate(items):
+            for j, right in enumerate(items):
+                equal = groups[indices[i]] == groups[indices[j]]
+                assert (left == right) == equal
+                assert (keys[i] == keys[j]) == equal
+                comparison = expressions[i].compare(expressions[j])
+                assert (comparison == 0) == equal
+                assert comparison == -expressions[j].compare(expressions[i])
+                assert comparison == (keys[i] > keys[j]) - (keys[i] < keys[j])
+                if equal:
+                    assert hash(left) == hash(right)
+                    assert hash(keys[i]) == hash(keys[j])
+
+
+def test_frozenset_field_ordering_errors():
+    class UnorderedSet(frozenset):
+        def __eq__(self, other):
+            return super().__eq__(other)
+
+        __hash__ = frozenset.__hash__
+
+        def __gt__(self, other):
+            raise RuntimeError('custom ordering failed')
+
+    first, second = [Basic(UnorderedSet([value])) for value in (1, 2)]
+    with raises(RuntimeError, match='custom ordering failed'):
+        first.compare(second)
+    clear_cache()
+    with raises(RuntimeError, match='custom ordering failed'):
+        assert default_sort_key(first) < default_sort_key(second)
+
+
+def test_frozenset_field_partial_order():
+    class ForwardSet(frozenset):
+        def __eq__(self, other):
+            return super().__eq__(other)
+
+        __hash__ = frozenset.__hash__
+
+    first, second = [Basic(ForwardSet([value])) for value in (1, 2)]
+    with raises(TypeError, match='Cannot order frozenset fields with custom equality'):
+        first.compare(second)
+    clear_cache()
+    with raises(TypeError, match='Cannot order frozenset fields with custom equality'):
+        assert default_sort_key(first) < default_sort_key(second)
 
 
 def test_class_sort_keys():

@@ -477,13 +477,19 @@ class Basic(Printable):
                     lk, rk = default_sort_key(l), default_sort_key(r)
                     c = bool(lk > rk) - bool(lk < rk)
             elif l == r and not (_has_builtin_equality(l, frozenset)
-                                 and _has_builtin_equality(r, frozenset)):
+                                 or _has_builtin_equality(r, frozenset)):
                 c = 0
             elif isinstance(l, frozenset) or isinstance(r, frozenset):
                 if not isinstance(l, frozenset):
                     c = 1
                 elif not isinstance(r, frozenset):
                     c = -1
+                elif _has_builtin_equality(l, frozenset) != _has_builtin_equality(r, frozenset):
+                    c = -1 if _has_builtin_equality(l, frozenset) else 1
+                elif not _has_builtin_equality(l, frozenset):
+                    c = (l > r) - (l < r)
+                    if not c:
+                        raise TypeError("Cannot order frozenset fields with custom equality")
                 else:
                     # Wrapping entries gives native and class fields the same rules.
                     l, r = _frozenset_args(l), _frozenset_args(r)
@@ -555,7 +561,7 @@ class Basic(Printable):
                 return 0, arg.sort_key(order)
             if isinstance(arg, type):
                 return 2, default_sort_key(arg, order=order)
-            if type(arg) is complex or _has_builtin_equality(arg, frozenset):
+            if type(arg) is complex or isinstance(arg, frozenset):
                 return 1, _NativeSortKey(arg)
             return 1, arg
 
@@ -624,10 +630,14 @@ class Basic(Printable):
                 if (isinstance(b, Basic) or
                         isinstance(a, type) != isinstance(b, type)):
                     return False
-                if (isinstance(a, frozenset) and _has_builtin_equality(a, frozenset)
-                        and _has_builtin_equality(b, frozenset)
-                        and _frozenset_args(a) != _frozenset_args(b)):
-                    return False
+                if isinstance(a, frozenset) or isinstance(b, frozenset):
+                    # Built-in and custom equality define different argument kinds.
+                    a_set = _has_builtin_equality(a, frozenset)
+                    b_set = _has_builtin_equality(b, frozenset)
+                    if a_set != b_set:
+                        return False
+                    if a_set and _frozenset_args(a) != _frozenset_args(b):
+                        return False
                 continue
             if not isinstance(b, Basic):
                 return False
