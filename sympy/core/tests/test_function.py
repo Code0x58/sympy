@@ -2260,6 +2260,62 @@ def test_Subs_leading_term_context(direction):
     assert source.as_leading_term(x, logx=logarithm, cdir=direction) == logarithm + direction*I*pi
 
 
+@pytest.mark.parametrize('method', ['series', 'nseries'])
+@pytest.mark.parametrize('source, variable, expected', [
+    (Subs(exp(y)/x**3, (x, y), (y, z)), z,
+        z**-3 + z**-2 + 1/(2*z) + S.One/6 + z/24 + z**2/120 + z**3/720 + O(z**4)),
+    (Subs(exp(y)/x, (x, y), (y, z)), z,
+        1/z + 1 + z/2 + z**2/6 + z**3/24 + O(z**4)),
+    (Subs(exp(y), y, x + 1), x,
+        E + E*x + E*x**2/2 + E*x**3/6 + O(x**4)),
+    (Subs(exp(y), y, x**2), x, 1 + x**2 + O(x**4)),
+    (Subs(y**2, y, x + y), y, x**2 + 2*x*y + y**2),
+    (Subs(y - x, (x, y), (y, z)), z, S.Zero),
+    (Subs(Integral(y, z), y, z), z, z**2),
+])
+def test_Subs_series(source, variable, expected, method):
+    assert getattr(source, method)(variable, n=4) == expected
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, f])
+def test_Subs_series_cache(wrap):
+    first, second = [Subs(wrap(variable), variable, x) for variable in (y, z)]
+    assert first == second
+    expected = wrap(x).series(x, n=4)
+    for sources in ((first, second), (second, first)):
+        clear_cache()
+        for source in sources:
+            result = source.series(x, n=4)
+            assert result == expected
+            assert result.free_symbols == {x}
+
+
+@pytest.mark.parametrize('direction', [1, -1])
+def test_Subs_nseries_context(direction):
+    logarithm = Symbol('L')
+    source = Subs(log(y), y, -x)
+    assert source.nseries(x, logx=logarithm, cdir=direction) == logarithm + direction*I*pi
+
+
+def test_Subs_series_evaluator_order():
+    class Named(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == y:
+                return S.Zero
+
+    source = Subs(Named(y, evaluate=False), y, x)
+    assert source.series(x) == 0
+
+
+def test_Subs_series_unresolved():
+    source = Subs(Derivative(f(y), y), y, x)
+    expected = (Subs(Derivative(f(y), y), y, 0)
+        + x*Subs(Derivative(f(y), (y, 2)), y, 0)
+        + x**2*Subs(Derivative(f(y), (y, 3)), y, 0)/2 + O(x**3))
+    assert source.series(x, n=3).doit() == expected
+
+
 def test_Subs_evaluation_introduces_target():
     class F(Function):
         @classmethod

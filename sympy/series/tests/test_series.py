@@ -127,8 +127,7 @@ def test_series_of_Subs():
     subs3 = Subs(sin(x * z), (x, z), (y, x))
 
     assert subs1.series(x) == subs1
-    subs1_series = (Subs(x, x, y) + Subs(-x**3/6, x, y) +
-        Subs(x**5/120, x, y) + O(y**6))
+    subs1_series = y - y**3/6 + y**5/120 + O(y**6)
     assert subs1.series() == subs1_series
     assert subs1.series(y) == subs1_series
     assert subs1.series(z) == subs1

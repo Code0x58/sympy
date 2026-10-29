@@ -2939,6 +2939,9 @@ class Subs(Expr):
         return val
 
     def _eval_nseries(self, x, n, logx, cdir=0):
+        value = self.doit()
+        if value != self:
+            return value.nseries(x, n=n, logx=logx, cdir=cdir)
         if x in self.point:
             # x is the variable being substituted into
             apos = self.point.index(x)
