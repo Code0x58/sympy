@@ -61,6 +61,15 @@ class _NameSensitiveSubs(Subs):
         return Integer(len(self.variables[0].name))
 
 
+class _HiddenDescriptorMeta(type):
+    __dict__ = property(lambda cls: {})
+
+    def __getattribute__(cls, name):
+        if name in ('__get__', '__set_name__'):
+            raise AttributeError(name)
+        return super().__getattribute__(name)
+
+
 def test_f_expand_complex():
     x = Symbol('x', real=True)
 
@@ -1012,8 +1021,12 @@ def test_function_basic_metadata_types(native, symbolic):
 
 @pytest.mark.parametrize('base', [tuple, frozenset])
 @pytest.mark.parametrize('override', [False, True])
-def test_function_container_metaclass_equality(base, override):
+@pytest.mark.parametrize('hide_dict', [False, True])
+def test_function_container_metaclass_equality(base, override, hide_dict):
     class Meta(type):
+        if hide_dict:
+            __dict__ = property(lambda cls: {})
+
         def __getattribute__(cls, name):
             if name == '__eq__':
                 return base.__eq__ if override else object.__eq__
@@ -1199,8 +1212,9 @@ def test_function_keyword_method_identity(constructor, method, values):
 
 
 @pytest.mark.parametrize('constructor', [Function, UndefinedFunction])
-def test_function_unhashable_keyword_descriptor(constructor):
-    class Evaluator:
+@pytest.mark.parametrize('metaclass', [type, _HiddenDescriptorMeta])
+def test_function_unhashable_keyword_descriptor(constructor, metaclass):
+    class Evaluator(metaclass=metaclass):
         __hash__ = None
 
         def __get__(self, instance, owner):
@@ -1208,6 +1222,55 @@ def test_function_unhashable_keyword_descriptor(constructor):
 
     function = constructor('unhashable_descriptor', eval=Evaluator(), value=[S.One])
     assert function(x) is S.One
+
+
+@pytest.mark.parametrize('constructor', [Function, UndefinedFunction])
+@pytest.mark.parametrize('method', ['eval', 'doit', '_imp_'])
+def test_function_hidden_keyword_descriptor(constructor, method):
+    class Evaluator:
+        def __get__(self, instance, owner):
+            return lambda *args, **hints: S.Zero if type(owner.value) is int else S.One
+
+    class HiddenEvaluator(Evaluator, metaclass=_HiddenDescriptorMeta):
+        pass
+
+    handler = HiddenEvaluator()
+    first, second = [constructor('hidden_keyword_descriptor', value=value, **{method: handler})
+                     for value in (1, S.One)]
+    for functions in (((first, 0), (second, 1)), ((second, 1), (first, 0))):
+        clear_cache()
+        for function, expected in functions:
+            value = function(1)
+            result = value.evalf() if method == '_imp_' else value.doit()
+            assert int(result) == expected
+    assert first != second
+    assert len({first, second}) == 2
+
+
+@pytest.mark.parametrize('constructor', [Function, UndefinedFunction])
+@pytest.mark.parametrize('hook', ['__new__', '__set_name__'])
+def test_function_owner_hooks(constructor, hook):
+    class OwnerHook(metaclass=_HiddenDescriptorMeta):
+        if hook == '__new__':
+            def __call__(self, owner, *args, **kwargs):
+                return S.Zero if type(owner.value) is int else S.One
+        else:
+            def __set_name__(self, owner, name):
+                owner.eval = classmethod(
+                    lambda cls, *args: S.Zero if type(cls.value) is int else S.One)
+
+    name = '__new__' if hook == '__new__' else 'owner_hook'
+    options = {name: OwnerHook()}
+    first, second = [constructor('owner_hooks', value=value, **options) for value in (1, S.One)]
+    for functions in (((first, 0), (second, 1)), ((second, 1), (first, 0))):
+        clear_cache()
+        for function, expected in functions:
+            assert function(x) == expected
+    assert first != second
+    left, right = Subs(f(x), f, first), Subs(f(x), f, second)
+    assert left != right
+    assert left.doit() == 0
+    assert right.doit() == 1
 
 
 @pytest.mark.parametrize('name', ['key', 'metadata_key'])
@@ -1857,6 +1920,43 @@ def test_Subs_atomic_power_hook_identity():
     assert second.doit() == atom
     assert first != second
     assert (first - second).doit() == -atom
+
+
+def test_Subs_hidden_atomic_descriptor():
+    class PowerRule(metaclass=_HiddenDescriptorMeta):
+        def __get__(self, instance, owner):
+            return lambda exponent: S.Zero if exponent == x else None
+
+    class NamedPower(AtomicExpr):
+        _eval_power = PowerRule()
+
+    atom = NamedPower()
+    first = Subs(Pow(atom, x, evaluate=False), x, 1)
+    second = Subs(Pow(atom, z, evaluate=False), z, 1)
+    assert first.doit() == 0
+    assert second.doit() == atom
+    assert first != second
+    assert (first - second).doit() == -atom
+
+
+def test_Subs_hidden_function_descriptor():
+    class Evaluator:
+        def __getattribute__(self, name):
+            if name == '__get__':
+                raise AttributeError(name)
+            return super().__getattribute__(name)
+
+        def __get__(self, instance, owner):
+            return lambda **hints: S.Zero if instance.args == (x,) else S.One
+
+    class Named(Function):
+        doit = Evaluator()
+
+    first, second = Subs(Named(x), x, 1), Subs(Named(z), z, 1)
+    assert first.doit() == 0
+    assert second.doit() == 1
+    assert first != second
+    assert (first - second).doit() == -1
 
 
 def test_Subs_multiple_symbols_preserve_atom_operators():

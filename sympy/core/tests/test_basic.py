@@ -175,6 +175,8 @@ def test_frozenset_custom_equality():
 
 def test_frozenset_metaclass_equality_attribute():
     class Meta(type):
+        __dict__ = property(lambda cls: {})
+
         def __getattribute__(cls, name):
             if name == '__eq__':
                 return frozenset.__eq__

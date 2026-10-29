@@ -5,7 +5,6 @@ from collections import Counter
 from collections.abc import Mapping, Iterable
 from decimal import Decimal
 from fractions import Fraction
-from inspect import getattr_static
 from itertools import zip_longest
 from functools import cmp_to_key
 from typing import TYPE_CHECKING, overload
@@ -47,10 +46,21 @@ def _is_standard_number(value):
             or cls is Decimal or cls is Fraction)
 
 
+def _get_type_attribute(value, name, default=None):
+    """Look up a type attribute without invoking metaclass lookup hooks."""
+    missing = object()
+    for cls in type.__dict__['__mro__'].__get__(type(value)):
+        namespace = type.__dict__['__dict__'].__get__(cls)
+        attribute = namespace.get(name, missing)
+        if attribute is not missing:
+            return attribute
+    return default
+
+
 def _has_builtin_equality(value, cls):
     """Recognize containers that inherit the built-in equality operation."""
     return isinstance(value, cls) and (type(value) is cls
-        or getattr_static(type(value), '__eq__') is cls.__eq__)
+        or _get_type_attribute(value, '__eq__') is cls.__eq__)
 
 
 def _frozenset_args(value):

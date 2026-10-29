@@ -44,7 +44,8 @@ from weakref import ref, WeakValueDictionary
 from .add import Add
 from .assumptions import _assume_defined
 from .basic import (Atom, Basic, _atomic, _is_standard_number,
-                    _get_postprocessors_for_type, _has_builtin_equality)
+                    _get_postprocessors_for_type, _get_type_attribute,
+                    _has_builtin_equality)
 from .cache import cacheit, cached_property
 from .containers import Tuple, Dict
 from .decorators import _sympifyit
@@ -428,10 +429,22 @@ class Application(Basic, metaclass=FunctionClass):
             return new(*[i._subs(old, new) for i in self.args])
 
 
-def _has_function_descriptors(options):
+_missing_type_attribute = object()
+
+
+def _has_type_attribute(value, name):
+    """Test a type attribute without invoking user lookup hooks."""
+    return _get_type_attribute(value, name,
+        _missing_type_attribute) is not _missing_type_attribute
+
+
+def _has_function_behavior(options):
+    """Identify options that can inspect their owning function class."""
     # A static numerical implementation has no class or instance receiver.
-    return any(hasattr(type(value), '__get__')
-        and not (name == '_imp_' and type(value) is staticmethod)
+    return '__new__' in options or any(
+        _has_type_attribute(value, '__set_name__')
+        or (_has_type_attribute(value, '__get__')
+            and not (name == '_imp_' and type(value) is staticmethod))
         for name, value in options.items())
 
 
@@ -509,7 +522,7 @@ class Function(Application, Expr):
         if cls is Function:
             if (len(args) != 1 or options and ('bases' in options
                     or options.get('__dict__') is not None
-                    or _has_function_descriptors(options))):
+                    or _has_function_behavior(options))):
                 return UndefinedFunction(*args, **options)
             key = _function_metadata_key(options)
         else:
@@ -1075,7 +1088,7 @@ class UndefinedFunction(FunctionClass):
         from .symbol import _filter_assumptions
         # Only factory functions have identity determined by name and options.
         is_factory = (bases == (AppliedUndef,) and not __dict__
-                      and not _has_function_descriptors(kwargs))
+                      and not _has_function_behavior(kwargs))
         # Allow Function('f', real=True)
         # and/or Function(Symbol('f', real=True))
         assumptions, kwargs = _filter_assumptions(kwargs)
@@ -1157,7 +1170,7 @@ def _is_uninterpreted_function(cls):
         if base is Function:
             return (inspect.getattr_static(cls, 'mro') is type.mro
                     and not _get_postprocessors_for_type(cls))
-        if any(callable(value) or hasattr(value, '__get__')
+        if any(callable(value) or _has_type_attribute(value, '__get__')
                for name, value in base.__dict__.items()
                if name not in ('__dict__', '__weakref__')):
             return False
@@ -1179,7 +1192,7 @@ def _has_standard_atom_hooks(cls):
         if (module is not None and module.__name__ in modules
                 and module.__dict__.get(base.__name__) is base):
             break
-        if any(callable(value) or hasattr(type(value), '__get__')
+        if any(callable(value) or _has_type_attribute(value, '__get__')
                for name, value in base.__dict__.items()
                if name not in ('__dict__', '__weakref__')):
             return False
