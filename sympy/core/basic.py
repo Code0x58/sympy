@@ -86,18 +86,44 @@ def _compare_tuple_args(left, right):
     return (tuple.__len__(left) > tuple.__len__(right)) - (tuple.__len__(left) < tuple.__len__(right))
 
 
-def _tuple_args_equal(left, right):
-    """Compare stored tuple entries with Basic's argument identity."""
-    if tuple.__len__(left) != tuple.__len__(right):
+def _args_equal(left, right):
+    """Compare argument sequences using Basic's scalar and container identity."""
+    if len(left) != len(right):
         return False
-    for a, b in zip(tuple.__iter__(left), tuple.__iter__(right)):
+    for a, b in zip(left, right):
         if a is b:
             continue
         if (isinstance(a, (Basic, type, tuple, frozenset))
                 or isinstance(b, (Basic, type, tuple, frozenset))):
-            if Basic(a) != Basic(b):
+            if not isinstance(a, Basic):
+                if isinstance(b, Basic) or isinstance(a, type) != isinstance(b, type):
+                    return False
+                if type(a) is tuple and type(b) is tuple:
+                    if not _args_equal(a, b):
+                        return False
+                    continue
+                if isinstance(a, (tuple, frozenset)) or isinstance(b, (tuple, frozenset)):
+                    for container in (tuple, frozenset):
+                        a_builtin = _has_builtin_equality(a, container)
+                        b_builtin = _has_builtin_equality(b, container)
+                        if a_builtin != b_builtin:
+                            return False
+                        if a_builtin:
+                            if container is tuple:
+                                if not _args_equal(tuple(tuple.__iter__(a)), tuple(tuple.__iter__(b))):
+                                    return False
+                            elif _frozenset_args(a) != _frozenset_args(b):
+                                return False
+                            break
+                    else:
+                        if not a == b:
+                            return False
+                    continue
+            elif not isinstance(b, Basic):
                 return False
-        elif not a == b:
+            elif a.is_Number and type(a) != type(b):
+                return False
+        if not a == b:
             return False
     return True
 
@@ -673,46 +699,7 @@ class Basic(Printable):
         if  not (self.is_Number and other.is_Number) and (
                 type(self) != type(other)):
             return False
-        a, b = self._hashable_content(), other._hashable_content()
-        if len(a) != len(b):
-            return False
-        # Check argument kinds and numeric types within expressions.
-        for a, b in zip(a, b):
-            if a is b:
-                continue
-            if not isinstance(a, Basic):
-                if (isinstance(b, Basic) or
-                        isinstance(a, type) != isinstance(b, type)):
-                    return False
-                if type(a) is tuple and type(b) is tuple:
-                    if not _tuple_args_equal(a, b):
-                        return False
-                    continue
-                if isinstance(a, (tuple, frozenset)) or isinstance(b, (tuple, frozenset)):
-                    # Built-in and custom equality define different argument kinds.
-                    for container in (tuple, frozenset):
-                        a_builtin = _has_builtin_equality(a, container)
-                        b_builtin = _has_builtin_equality(b, container)
-                        if a_builtin != b_builtin:
-                            return False
-                        if a_builtin:
-                            if container is tuple:
-                                if not _tuple_args_equal(a, b):
-                                    return False
-                            elif _frozenset_args(a) != _frozenset_args(b):
-                                return False
-                            break
-                    else:
-                        if not a == b:
-                            return False
-                    continue
-            elif not isinstance(b, Basic):
-                return False
-            elif a.is_Number and type(a) != type(b):
-                return False
-            if not a == b:
-                return False
-        return True
+        return _args_equal(self._hashable_content(), other._hashable_content())
 
     def __ne__(self, other):
         """``a != b``  -> Compare two symbolic trees and see whether they are different
