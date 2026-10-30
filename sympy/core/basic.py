@@ -75,6 +75,10 @@ def _compare_tuple_args(left, right):
             continue
         if type(a) is int and type(b) is int:
             c = (a > b) - (a < b)
+        elif isinstance(a, Basic):
+            c = a.compare(b)
+        elif isinstance(b, Basic):
+            c = -b.compare(a)
         else:
             c = Basic(a).compare(Basic(b))
         if c:

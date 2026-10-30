@@ -1114,8 +1114,12 @@ class Float(Number):
         return int(_to_int(self._mpf_))  # uses round_fast = round_down
 
     def __eq__(self, other):
+        if self is other:
+            return True
         if isinstance(other, float):
             other = Float(other)
+        if type(self) is Float and type(other) is Float:
+            return self._mpf_ == other._mpf_ and self._prec == other._prec
         return Basic.__eq__(self, other)
 
     def __ne__(self, other):
