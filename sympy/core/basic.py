@@ -86,8 +86,10 @@ def _compare_tuple_args(left, right):
     return (tuple.__len__(left) > tuple.__len__(right)) - (tuple.__len__(left) < tuple.__len__(right))
 
 
-def _tuple_args_same_kind(left, right):
-    """Check argument kinds in tuples whose stored values compare equal."""
+def _tuple_args_equal(left, right):
+    """Compare stored tuple entries with Basic's argument identity."""
+    if tuple.__len__(left) != tuple.__len__(right):
+        return False
     for a, b in zip(tuple.__iter__(left), tuple.__iter__(right)):
         if a is b:
             continue
@@ -95,6 +97,8 @@ def _tuple_args_same_kind(left, right):
                 or isinstance(b, (Basic, type, tuple, frozenset))):
             if Basic(a) != Basic(b):
                 return False
+        elif not a == b:
+            return False
     return True
 
 
@@ -514,9 +518,9 @@ class Basic(Printable):
                     c = bool(lk > rk) - bool(lk < rk)
             elif type(l) is tuple and type(r) is tuple:
                 c = _compare_tuple_args(l, r)
-            elif l == r and not (
+            elif not (
                     _has_builtin_equality(l, frozenset) or _has_builtin_equality(r, frozenset)
-                    or _has_builtin_equality(l, tuple) or _has_builtin_equality(r, tuple)):
+                    or _has_builtin_equality(l, tuple) or _has_builtin_equality(r, tuple)) and l == r:
                 c = 0
             elif (isinstance(l, frozenset) or isinstance(r, frozenset)
                     or isinstance(l, tuple) and isinstance(r, tuple)):
@@ -670,7 +674,7 @@ class Basic(Printable):
                 type(self) != type(other)):
             return False
         a, b = self._hashable_content(), other._hashable_content()
-        if a != b:
+        if len(a) != len(b):
             return False
         # Check argument kinds and numeric types within expressions.
         for a, b in zip(a, b):
@@ -681,7 +685,7 @@ class Basic(Printable):
                         isinstance(a, type) != isinstance(b, type)):
                     return False
                 if type(a) is tuple and type(b) is tuple:
-                    if not _tuple_args_same_kind(a, b):
+                    if not _tuple_args_equal(a, b):
                         return False
                     continue
                 if isinstance(a, (tuple, frozenset)) or isinstance(b, (tuple, frozenset)):
@@ -693,14 +697,20 @@ class Basic(Printable):
                             return False
                         if a_builtin:
                             if container is tuple:
-                                if not _tuple_args_same_kind(a, b):
+                                if not _tuple_args_equal(a, b):
                                     return False
                             elif _frozenset_args(a) != _frozenset_args(b):
                                 return False
-                continue
-            if not isinstance(b, Basic):
+                            break
+                    else:
+                        if not a == b:
+                            return False
+                    continue
+            elif not isinstance(b, Basic):
                 return False
-            if a.is_Number and type(a) != type(b):
+            elif a.is_Number and type(a) != type(b):
+                return False
+            if not a == b:
                 return False
         return True
 

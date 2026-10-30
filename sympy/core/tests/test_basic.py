@@ -382,6 +382,44 @@ def test_native_and_sympy_argument_identity():
         assert second != first
 
 
+def test_argument_kinds_before_equality():
+    class Value:
+        def __eq__(self, other):
+            raise RuntimeError('native equality failed')
+
+        __hash__ = object.__hash__
+
+    for native in (Fraction(1), Value()):
+        for symbolic in (S.One, Float(1), Symbol):
+            for wrap in (lambda value: value, lambda value: (value,),
+                         lambda value: ((value,),), lambda value: frozenset([value])):
+                first, second = Basic(wrap(native)), Basic(wrap(symbolic))
+                assert first != second and second != first
+                assert first.compare(second) == -second.compare(first) != 0
+                assert default_sort_key(first) != default_sort_key(second)
+
+    for wrap in (lambda value: value, lambda value: (value,)):
+        with raises(RuntimeError, match='native equality failed'):
+            assert Basic(wrap(Value())) == Basic(wrap(Value()))
+
+
+def test_argument_equality_short_circuit():
+    class Value(Basic):
+        def __eq__(self, other):
+            raise RuntimeError('unreached equality')
+
+        __hash__ = Basic.__hash__
+
+    first_value, second_value = Value(0), Value(1)
+    for first, second in [
+        (Basic(0, first_value), Basic(1, second_value)),
+        (Basic((0, first_value)), Basic((1, second_value))),
+        (Basic(first_value), Basic(second_value, second_value)),
+        (Basic((first_value,)), Basic((second_value, second_value))),
+    ]:
+        assert first != second and second != first
+
+
 def test_native_argument_equality_without_ordering():
     for first, second in [(None, None), (1, 1 + 0j)]:
         first, second = Basic(first), Basic(second)
