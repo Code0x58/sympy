@@ -73,6 +73,12 @@ def _iterable_args(args):
     return args if iterable(args, exclude=NotIterable) else ()
 
 
+def _free_symbol_names(expr):
+    """Collect the available names of free-symbol objects."""
+    return {name for symbol in expr.free_symbols
+            if (name := getattr(symbol, 'name', None)) is not None}
+
+
 def as_Basic(expr):
     """Return expr as a Basic instance using strict sympify
     or raise a TypeError; this is just a wrapper to _sympify,
@@ -932,8 +938,7 @@ class Basic(Printable):
                 if b not in temporary or b in canonical:
                     continue
 
-                names = {s.name for s in x.free_symbols
-                         if isinstance(s, Symbol)}
+                names = _free_symbol_names(x)
                 i = 0
                 while f'_{i}' in used or f'_{i}' in names:
                     i += 1
@@ -970,15 +975,11 @@ class Basic(Printable):
         reps = {}
         # A symbol can have both bound and free occurrences.
 
-        # XXX: free_symbols only returns particular kinds of expressions that
-        # generally have a .name attribute. There is not a proper class/type
-        # that represents this.
-        names = {i.name for i in self.free_symbols} # type: ignore
+        names = _free_symbol_names(self)
         for b in bound:
             d = next(dums)
-            if b.is_Symbol:
-                while d.name in names:
-                    d = next(dums)
+            while d.name in names:
+                d = next(dums)
             reps[b] = d
         return reps
 

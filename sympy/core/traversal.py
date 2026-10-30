@@ -64,8 +64,10 @@ def iterfreeargs(expr, _first=True):
         if not is_basic and isinstance(i, type):
             continue
         if _first and hasattr(i, 'bound_symbols'):
-            void = i.canonical_variables.values()
-            for arg in iterfreeargs(i.as_dummy(), _first=False):
+            canonical = i.as_dummy()
+            bound = getattr(canonical, 'bound_symbols', None)
+            void = bound if bound is not None else i.canonical_variables.values()
+            for arg in iterfreeargs(canonical, _first=False):
                 has = None if isinstance(arg, type) else getattr(arg, 'has', None)
                 if has is None or not has(*void):
                     yield arg

@@ -38,7 +38,7 @@ from sympy.core.function import (PoleError, _mexpand, arity,
         BadSignatureError, BadArgumentsError)
 from sympy.core.parameters import _exp_is_pow, distribute, evaluate
 from sympy.core.sympify import sympify, SympifyError
-from sympy.matrices import MutableMatrix, ImmutableMatrix
+from sympy.matrices import MutableMatrix, ImmutableMatrix, MatrixSymbol
 from sympy.sets.sets import FiniteSet
 from sympy.sets.fancysets import Range
 from sympy.solvers.solveset import solveset
@@ -1626,6 +1626,85 @@ def test_binding_canonical_names_preserve_free_occurrences(constructor):
     assert source.canonical_variables == {variable: canonical}
     assert source.has_free(variable)
     assert source.has_xfree({variable})
+
+
+@pytest.mark.parametrize('constructor', [Integral, Sum, Product])
+@pytest.mark.parametrize('variable', [f(x), Indexed('a', x)])
+def test_compound_binding_canonical_names(constructor, variable):
+    free, canonical = symbols('_0 _1')
+    source = constructor(variable, (variable, 1, free))
+    assert source.canonical_variables == {variable: canonical}
+    assert list(source.as_dummy().bound_symbols) == [canonical]
+    assert source.has_free(free)
+    assert source.has_xfree({free})
+    assert not source.has_free(canonical)
+
+
+@pytest.mark.parametrize('variable', [f(x), Indexed('a', x), MatrixSymbol('M', 2, 2)])
+def test_Subs_compound_binding_canonical_names(variable):
+    free, canonical = symbols('_0 _1')
+    source = Subs(variable, variable, free)
+    assert source.canonical_variables == {variable: canonical}
+    assert source.as_dummy().variables == (canonical,)
+    assert source.has_free(free)
+    assert source.has_xfree({free})
+    assert not source.has_free(canonical)
+
+
+@pytest.mark.parametrize('point', [MatrixSymbol('_0', 2, 2), MatrixSymbol('_0', 2, 2)[0, 0]])
+@pytest.mark.parametrize('wrap', [lambda value: value, Tuple, g])
+def test_Subs_matrix_free_names(point, wrap):
+    free, canonical = symbols('_0 _1')
+    source = Subs(f(x), x, point)
+    assert source.canonical_variables == {x: canonical}
+    assert source.as_dummy().variables == (canonical,)
+    wrapped = wrap(source)
+    assert wrapped.has_free(point)
+    assert wrapped.has_xfree({point})
+    assert not wrapped.has_free(x, free, canonical)
+    assert not wrapped.has_xfree({x, free, canonical})
+
+
+def test_Subs_unnamed_free_object():
+    class FreeAtom(AtomicExpr):
+        @property
+        def free_symbols(self):
+            return {self}
+
+    point = FreeAtom()
+    source = Subs(f(x), x, point)
+    canonical = Symbol('_0')
+    assert source.canonical_variables == {x: canonical}
+    assert source.as_dummy().variables == (canonical,)
+    assert source.has_free(point)
+    assert not source.has_free(canonical)
+
+
+@pytest.mark.parametrize('variable', [f(Symbol('_0')), Indexed('a', Symbol('_0'))])
+@pytest.mark.parametrize('wrap', [lambda value: value, Tuple, g])
+def test_Subs_compound_free_query_labels(variable, wrap):
+    source = wrap(Subs(variable, variable, y))
+    first, second = symbols('_0 _1')
+    assert source.has_free(y)
+    assert not source.has_free(first, second)
+    assert not source.has_xfree({first, second})
+
+
+def test_canonical_free_name_error():
+    class FreeAtom(AtomicExpr):
+        @property
+        def free_symbols(self):
+            return {self}
+
+        @property
+        def name(self):
+            raise ValueError('free symbol name failed')
+
+    source = Subs(f(x), x, FreeAtom())
+    with raises(ValueError, match='free symbol name failed'):
+        source.canonical_variables
+    with raises(ValueError, match='free symbol name failed'):
+        source.as_dummy()
 
 
 @pytest.mark.parametrize('wrap', [lambda value: value, Basic, Tuple, g])
