@@ -111,6 +111,53 @@ def test_compare_frozenset_arguments():
             assert first.compare(other) == -other.compare(first)
 
 
+def test_custom_frozenset_ordering_alias():
+    class Label:
+        def __init__(self, label):
+            self.label = label
+
+        def __eq__(self, other):
+            return isinstance(other, Label) and self.label == other.label
+
+        def __hash__(self):
+            return hash(self.label)
+
+        def __lt__(self, other):
+            return self.label < other.label if isinstance(other, Label) else NotImplemented
+
+        def __gt__(self, other):
+            return self.label > other.label if isinstance(other, Label) else NotImplemented
+
+    class LabelSet(Label, frozenset):
+        def __new__(cls, label):
+            return frozenset.__new__(cls, [0])
+
+    for wrap in (lambda value: value, lambda value: (value,),
+                 lambda value: frozenset([value])):
+        first, alias, other = [Basic(wrap(value))
+            for value in (LabelSet(0), Label(0), LabelSet(1))]
+        assert first == alias
+        assert hash(first) == hash(alias)
+        assert first.compare(alias) == alias.compare(first) == 0
+        assert first.compare(other) == alias.compare(other) == -1
+        assert other.compare(first) == other.compare(alias) == 1
+        keys = []
+        for item in (first, alias, other):
+            clear_cache()
+            keys.append(default_sort_key(item))
+        assert keys[0] == keys[1]
+        assert hash(keys[0]) == hash(keys[1])
+        assert keys[0] < keys[2] and keys[1] < keys[2]
+        assert keys[2] > keys[0] and keys[2] > keys[1]
+
+    class FailingLabel(Label):
+        def __lt__(self, other):
+            raise RuntimeError('label ordering failed')
+
+    with raises(RuntimeError, match='label ordering failed'):
+        Basic(FailingLabel(0)).compare(Basic(LabelSet(1)))
+
+
 def test_frozenset_argument_kinds():
     for native, symbolic in [(1, S.One), (1.0, Float(1)), (True, S.true)]:
         for nested in (False, True):

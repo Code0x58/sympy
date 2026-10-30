@@ -554,13 +554,10 @@ class Basic(Printable):
                              else tuple)
                 l_builtin = _has_builtin_equality(l, container)
                 r_builtin = _has_builtin_equality(r, container)
-                if not isinstance(l, container):
-                    c = 1
-                elif not isinstance(r, container):
-                    c = -1
-                elif l_builtin != r_builtin:
+                if l_builtin != r_builtin:
                     c = -1 if l_builtin else 1
                 elif not l_builtin:
+                    # Custom equality can equate containers with other native types.
                     c = bool(l > r) - bool(l < r)
                     if not c:
                         raise TypeError(f"Cannot order {container.__name__} fields with custom equality")
