@@ -213,6 +213,20 @@ def test_iterfreeargs_native_binding():
     assert list(iterfreeargs(source)) == [source, binder, y]
 
 
+def test_iterfreeargs_nested_bindings():
+    x, y, z = symbols('x y z')
+    source = Lambda(x, Lambda(y, x + y + z))
+    assert list(iterfreeargs(source)) == [source, z]
+
+
+def test_iterfreeargs_unbound_integral():
+    x, z = symbols('x z')
+    source = Integral(z, z)
+    assert list(iterfreeargs(source)) == [source, z, Tuple(z), z]
+    wrapped = Lambda(x, source)
+    assert list(iterfreeargs(wrapped)) == [wrapped, source, z, Tuple(z), z]
+
+
 def test_deprecated_imports():
     x = symbols('x')
 

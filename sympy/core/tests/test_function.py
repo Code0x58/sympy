@@ -1707,6 +1707,23 @@ def test_canonical_free_name_error():
         source.as_dummy()
 
 
+@pytest.mark.parametrize('outer', [
+    Lambda, lambda variable, expr: Subs(expr, variable, 0),
+    lambda variable, expr: Integral(expr, (variable, 0, 1)),
+])
+@pytest.mark.parametrize('free', [z, Symbol('_0'), Symbol('_1')])
+@pytest.mark.parametrize('depends_on_outer', [False, True])
+def test_nested_binding_free_queries(outer, free, depends_on_outer):
+    inner = Lambda(y, y + z + (x if depends_on_outer else 0))
+    source = outer(x, Tuple(free, inner))
+    expected = {free, z}
+    assert source.free_symbols == expected
+    for query in (x, y, z, *symbols('_0:4')):
+        assert source.has_xfree({query}) == (query in expected)
+        assert source.has_free(query) == (query in expected)
+    assert not source.has_xfree({Tuple(label) for label in symbols('_0:4')})
+
+
 @pytest.mark.parametrize('wrap', [lambda value: value, Basic, Tuple, g])
 @pytest.mark.parametrize('simultaneous', [False, True])
 @pytest.mark.parametrize('mapping', [False, True])

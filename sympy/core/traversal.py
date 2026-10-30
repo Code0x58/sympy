@@ -63,7 +63,8 @@ def iterfreeargs(expr, _first=True):
         is_basic = isinstance(i, Basic)
         if not is_basic and isinstance(i, type):
             continue
-        if _first and hasattr(i, 'bound_symbols'):
+        # The canonical root is filtered by its caller; nested scopes are separate.
+        if (_first or i is not expr) and getattr(i, 'bound_symbols', ()):
             canonical = i.as_dummy()
             bound = getattr(canonical, 'bound_symbols', None)
             void = bound if bound is not None else i.canonical_variables.values()
