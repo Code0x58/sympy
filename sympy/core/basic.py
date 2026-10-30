@@ -1994,7 +1994,7 @@ class Basic(Printable):
                 return rv
             raw_args = getattr(rv, 'args', None)
             if raw_args is not None:
-                args = raw_args if isinstance(rv, Basic) else _iterable_args(raw_args)
+                args = raw_args if isinstance(rv, Basic) else tuple(_iterable_args(raw_args))
                 if args:
                     newargs = tuple([walk(a, F) for a in args])
                     if args != newargs or changed and any(

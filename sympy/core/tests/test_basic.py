@@ -838,6 +838,46 @@ def test_transform_native_leaf_arguments():
         assert source.replace(lambda node: node is leaf, lambda node: x) == expected
 
 
+def test_replace_native_child_sequences():
+    x, y, z = symbols('x y z')
+    for factory in (tuple, list, iter):
+        class Node:
+            @property
+            def args(self):
+                return factory((x,))
+
+        node = Node()
+        for source in (Basic(node, y), Basic(y, node)):
+            result, changes = source.replace(lambda item: False, lambda item: z, map=True)
+            assert result is source
+            assert changes == {}
+            result = source.replace(lambda item: item is y, lambda item: z)
+            assert result.args == tuple(z if item is y else item for item in source.args)
+
+
+def test_replace_native_child_sequences_simultaneous():
+    y, z, t = symbols('y z t')
+    for factory in (tuple, list, iter):
+        class Projection:
+            @property
+            def args(self):
+                return factory((y, z))
+
+            @staticmethod
+            def func(*children):
+                return children[0]
+
+        source = Basic(Projection())
+        for simultaneous in (False, True):
+            for mapping in (False, True):
+                result = source.replace(lambda item: item is y or item is z,
+                    lambda item: {y: z, z: t}[item], simultaneous=simultaneous, map=mapping)
+                if mapping:
+                    result, changes = result
+                    assert changes == {y: z, z: t}
+                assert result == Basic(z if simultaneous else t)
+
+
 def test_as_dummy_scopes():
     u, v, x, y, _0, _1 = symbols('u v x y _0 _1')
 
