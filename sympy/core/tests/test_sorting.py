@@ -424,6 +424,100 @@ def test_equal_opaque_metadata_sort_keys():
     assert first_key == default_sort_key(rebuilt)
 
 
+@pytest.mark.parametrize('factory', ['key', 'function'])
+@pytest.mark.parametrize('trigger', [1, 2, 3, 4])
+@pytest.mark.thread_unsafe(reason='temporarily replaces the process-global comparison-key registry')
+def test_metadata_sort_key_reentrant_equality(monkeypatch, factory, trigger):
+    monkeypatch.setattr(function_module, '_comparison_keys',
+        type(function_module._comparison_keys)())
+    retained = []
+
+    def create(value):
+        if factory == 'key':
+            return function_module._get_comparison_key(value)
+        return function_module.UndefinedFunction('reentrant_field', value=value)
+
+    def key(value):
+        return value if factory == 'key' else default_sort_key(value)
+
+    class Value:
+        count = 0
+        active = False
+
+        def __init__(self, label):
+            self.label = label
+
+        def __hash__(self):
+            return 0
+
+        def __eq__(self, other):
+            if not isinstance(other, Value):
+                return NotImplemented
+            if {self.label, other.label} == {0, 1} and not Value.active:
+                Value.count += 1
+                if Value.count == trigger:
+                    Value.active = True
+                    retained.extend((create(Value(2)), create(Value(1))))
+                    Value.active = False
+            return self.label == other.label
+
+    values = [create(Value(0))]
+    values.extend(create(Value(1)) for _ in range(trigger))
+    assert len(retained) == 2
+    other, inner = map(key, retained)
+    for value in values[1:]:
+        outer = key(value)
+        assert outer == inner
+        assert hash(outer) == hash(inner)
+        assert not outer < inner and not inner < outer
+        assert (outer < other) == (inner < other)
+        assert (other < outer) == (other < inner)
+
+
+@pytest.mark.thread_unsafe(reason='temporarily replaces the process-global comparison-key registry')
+def test_metadata_sort_key_collected_during_lookup(monkeypatch):
+    retained = []
+
+    class Registry(type(function_module._comparison_keys)):
+        def setdefault(self, key, default=None):
+            reference = super().setdefault(key, default)
+            retained.clear()
+            return reference
+
+    registry = Registry()
+    monkeypatch.setattr(function_module, '_comparison_keys', registry)
+    value = Symbol('collected_comparison_key')
+    first = function_module._get_comparison_key(value)
+    old_reference = ref(first)
+    retained.append(first)
+    del first
+    replacement = function_module._get_comparison_key(value)
+    assert old_reference() is None
+    assert replacement.value is value
+    assert function_module._get_comparison_key(value) is replacement
+    assert len(registry) == 1
+
+
+@pytest.mark.thread_unsafe(reason='temporarily replaces the process-global comparison-key registry')
+def test_metadata_sort_key_equality_error(monkeypatch):
+    monkeypatch.setattr(function_module, '_comparison_keys',
+        type(function_module._comparison_keys)())
+
+    class Value:
+        def __hash__(self):
+            return 0
+
+        def __eq__(self, other):
+            if self is other:
+                return True
+            raise RuntimeError('metadata equality failed')
+
+    first = function_module._get_comparison_key(Value())
+    with raises(RuntimeError, match='metadata equality failed'):
+        function_module._get_comparison_key(Value())
+    assert function_module._comparison_keys.get(first)() is first
+
+
 def test_metadata_sort_key_collection():
     class Value:
         pass

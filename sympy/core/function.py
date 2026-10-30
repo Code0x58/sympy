@@ -39,7 +39,7 @@ import os
 from decimal import Decimal
 from itertools import count as _count
 from threading import RLock
-from weakref import ref, WeakValueDictionary
+from weakref import ref, WeakKeyDictionary
 
 from .add import Add
 from .assumptions import _assume_defined
@@ -1000,7 +1000,7 @@ class _ComparisonKey:
         return _get_comparison_key, (self.value,)
 
 
-_comparison_keys = WeakValueDictionary()
+_comparison_keys = WeakKeyDictionary()
 _comparison_key_indices = _count()
 _comparison_key_lock = RLock()
 
@@ -1020,15 +1020,14 @@ if hasattr(os, 'register_at_fork'):
 
 def _get_comparison_key(value):
     candidate = _ComparisonKey(value)
-    reference = ref(candidate)
     with _comparison_key_lock:
-        key = _comparison_keys.get(reference)
-        if key is None:
-            candidate.index = next(_comparison_key_indices)
-            # Both sides are weak so values can refer back to their owners.
-            _comparison_keys[reference] = candidate
-            key = candidate
-        return key
+        candidate.index = next(_comparison_key_indices)
+        # Atomic insertion preserves representatives when equality reenters.
+        # Retry if a weak representative disappears before dereferencing it.
+        while True:
+            key = _comparison_keys.setdefault(candidate, ref(candidate))()
+            if key is not None:
+                return key
 
 
 def _canonical_function_metadata(value):
