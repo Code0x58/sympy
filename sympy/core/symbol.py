@@ -425,6 +425,17 @@ class Symbol(AtomicExpr, Boolean): # type: ignore
         for name, value in state.items():
             setattr(self, name, value)
 
+    def __eq__(self, other):
+        if self is other:
+            return True
+        if (type(self) is Symbol and type(other) is Symbol
+                and type(self.name) is str and type(other.name) is str
+                and self.name != other.name):
+            return False
+        return Basic.__eq__(self, other)
+
+    __hash__ = Basic.__hash__
+
     def _hashable_content(self):
         return (self.name,) + self._assumptions0
 

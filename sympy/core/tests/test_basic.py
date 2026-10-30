@@ -420,6 +420,37 @@ def test_argument_equality_short_circuit():
         assert first != second and second != first
 
 
+def test_symbol_equality_compatibility():
+    class Name(str):
+        __slots__ = ()
+
+    class SymbolSubclass(Symbol):
+        def _hashable_content(self):
+            return ()
+
+    values = [Symbol('x'), Symbol('y'), Symbol('x', positive=True),
+              Symbol(Name('name')), Symbol('name'), Dummy('x'),
+              SymbolSubclass('x'), SymbolSubclass('y')]
+    for first in values:
+        for second in [*values, S.One, Float(1), Basic(), 1, 'x', None]:
+            assert first.__eq__(second) is Basic.__eq__(first, second)
+            if first == second:
+                assert hash(first) == hash(second)
+
+    class FailingName(str):
+        __slots__ = ()
+
+        def __eq__(self, other):
+            raise RuntimeError('symbol name equality failed')
+
+        __hash__ = str.__hash__
+
+    first = Symbol.__xnew__(Symbol, FailingName('first'))
+    second = Symbol.__xnew__(Symbol, 'second')
+    with raises(RuntimeError, match='symbol name equality failed'):
+        assert first == second
+
+
 def test_native_argument_equality_without_ordering():
     for first, second in [(None, None), (1, 1 + 0j)]:
         first, second = Basic(first), Basic(second)
