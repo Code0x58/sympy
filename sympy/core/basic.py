@@ -68,6 +68,32 @@ def _frozenset_args(value):
     return frozenset(map(Basic, frozenset.__iter__(value)))
 
 
+def _compare_tuple_args(left, right):
+    """Compare stored tuple entries with Basic's argument identity."""
+    for a, b in zip(tuple.__iter__(left), tuple.__iter__(right)):
+        if a is b:
+            continue
+        if type(a) is int and type(b) is int:
+            c = (a > b) - (a < b)
+        else:
+            c = Basic(a).compare(Basic(b))
+        if c:
+            return c
+    return (tuple.__len__(left) > tuple.__len__(right)) - (tuple.__len__(left) < tuple.__len__(right))
+
+
+def _tuple_args_same_kind(left, right):
+    """Check argument kinds in tuples whose stored values compare equal."""
+    for a, b in zip(tuple.__iter__(left), tuple.__iter__(right)):
+        if a is b:
+            continue
+        if (isinstance(a, (Basic, type, tuple, frozenset))
+                or isinstance(b, (Basic, type, tuple, frozenset))):
+            if Basic(a) != Basic(b):
+                return False
+    return True
+
+
 def _iterable_args(args):
     """Return an iterable argument sequence, or an empty tuple for a leaf."""
     return args if iterable(args, exclude=NotIterable) else ()
@@ -482,29 +508,38 @@ class Basic(Printable):
                 else:
                     lk, rk = default_sort_key(l), default_sort_key(r)
                     c = bool(lk > rk) - bool(lk < rk)
-            elif l == r and not (_has_builtin_equality(l, frozenset)
-                                 or _has_builtin_equality(r, frozenset)):
+            elif type(l) is tuple and type(r) is tuple:
+                c = _compare_tuple_args(l, r)
+            elif l == r and not (
+                    _has_builtin_equality(l, frozenset) or _has_builtin_equality(r, frozenset)
+                    or _has_builtin_equality(l, tuple) or _has_builtin_equality(r, tuple)):
                 c = 0
-            elif isinstance(l, frozenset) or isinstance(r, frozenset):
-                if not isinstance(l, frozenset):
+            elif (isinstance(l, frozenset) or isinstance(r, frozenset)
+                    or isinstance(l, tuple) and isinstance(r, tuple)):
+                container = (frozenset if isinstance(l, frozenset) or isinstance(r, frozenset)
+                             else tuple)
+                l_builtin = _has_builtin_equality(l, container)
+                r_builtin = _has_builtin_equality(r, container)
+                if not isinstance(l, container):
                     c = 1
-                elif not isinstance(r, frozenset):
+                elif not isinstance(r, container):
                     c = -1
-                elif _has_builtin_equality(l, frozenset) != _has_builtin_equality(r, frozenset):
-                    c = -1 if _has_builtin_equality(l, frozenset) else 1
-                elif not _has_builtin_equality(l, frozenset):
-                    c = (l > r) - (l < r)
+                elif l_builtin != r_builtin:
+                    c = -1 if l_builtin else 1
+                elif not l_builtin:
+                    c = bool(l > r) - bool(l < r)
                     if not c:
-                        raise TypeError("Cannot order frozenset fields with custom equality")
+                        raise TypeError(f"Cannot order {container.__name__} fields with custom equality")
+                elif container is tuple:
+                    c = _compare_tuple_args(l, r)
                 else:
                     # Wrapping entries gives native and class fields the same rules.
                     l, r = _frozenset_args(l), _frozenset_args(r)
                     if l == r:
                         c = 0
                     else:
-                        l = Basic(*sorted(l, key=_args_sortkey))
-                        r = Basic(*sorted(r, key=_args_sortkey))
-                        c = l.compare(r)
+                        l, r = sorted(l, key=_args_sortkey), sorted(r, key=_args_sortkey)
+                        c = Basic(*l).compare(Basic(*r))
             # NaNs must not acquire an order through their components.
             elif ((type(l) is complex or type(r) is complex)
                     and _is_standard_number(l) and _is_standard_number(r)
@@ -512,7 +547,9 @@ class Basic(Printable):
                 l, r = (l.real, l.imag), (r.real, r.imag)
                 c = (l > r) - (l < r)
             else:
-                c = (l > r) - (l < r)
+                c = bool(l > r) - bool(l < r)
+                if not c and _has_builtin_equality(l, tuple) != _has_builtin_equality(r, tuple):
+                    raise TypeError("Cannot order tuple fields with custom equality")
             if c:
                 return c
         return 0
@@ -567,9 +604,12 @@ class Basic(Printable):
                 return 0, arg.sort_key(order)
             if isinstance(arg, type):
                 return 2, default_sort_key(arg, order=order)
-            if type(arg) is complex or isinstance(arg, frozenset):
-                return 1, _NativeSortKey(arg)
-            return 1, arg
+            if (_is_standard_number(arg) and type(arg) is not complex
+                    or type(arg) is str or arg is None):
+                return 1, arg
+            if type(arg) is tuple and all(type(value) is int for value in arg):
+                return 1, arg
+            return 1, _NativeSortKey(arg)
 
         args = self._sorted_args
         args = len(args), tuple([inner_key(arg) for arg in args])
@@ -636,14 +676,23 @@ class Basic(Printable):
                 if (isinstance(b, Basic) or
                         isinstance(a, type) != isinstance(b, type)):
                     return False
-                if isinstance(a, frozenset) or isinstance(b, frozenset):
+                if type(a) is tuple and type(b) is tuple:
+                    if not _tuple_args_same_kind(a, b):
+                        return False
+                    continue
+                if isinstance(a, (tuple, frozenset)) or isinstance(b, (tuple, frozenset)):
                     # Built-in and custom equality define different argument kinds.
-                    a_set = _has_builtin_equality(a, frozenset)
-                    b_set = _has_builtin_equality(b, frozenset)
-                    if a_set != b_set:
-                        return False
-                    if a_set and _frozenset_args(a) != _frozenset_args(b):
-                        return False
+                    for container in (tuple, frozenset):
+                        a_builtin = _has_builtin_equality(a, container)
+                        b_builtin = _has_builtin_equality(b, container)
+                        if a_builtin != b_builtin:
+                            return False
+                        if a_builtin:
+                            if container is tuple:
+                                if not _tuple_args_same_kind(a, b):
+                                    return False
+                            elif _frozenset_args(a) != _frozenset_args(b):
+                                return False
                 continue
             if not isinstance(b, Basic):
                 return False

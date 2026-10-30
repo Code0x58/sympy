@@ -7,6 +7,7 @@ import pytest
 from sympy.concrete.summations import Sum
 from sympy.core import (EulerGamma, Catalan, TribonacciConstant,
     GoldenRatio)
+from sympy.core.basic import Basic
 from sympy.core.containers import Tuple
 from sympy.core.expr import unchanged
 from sympy.core.logic import fuzzy_not
@@ -659,6 +660,18 @@ def test_zero_not_false():
 
 
 @conserve_mpmath_dps
+def test_Float_compare():
+    class FloatSubclass(Float):
+        pass
+
+    floats = [Float(0), Float('1.25', 20), Float('1.25', 50), FloatSubclass('1.25', 20)]
+    assert type(floats[-1]) is FloatSubclass
+    for first in floats:
+        assert first.compare(first) == 0
+        for second in [*floats, S.One, S.NaN, 1]:
+            assert first.compare(second) == Basic.compare(first, second)
+
+
 def test_float_mpf():
     import mpmath
     mpmath.mp.dps = 100

@@ -60,6 +60,8 @@ def test_frozenset_sort_key(order, nested, convert):
     (frozenset([1]), frozenset([2])),
     (frozenset([S.One]), frozenset([1])),
     (frozenset([frozenset([1])]), frozenset([frozenset([2])])),
+    ((1j,), (2j,)),
+    ((frozenset([1]),), (frozenset([2]),)),
 ])
 def test_native_argument_sort_keys(lower, upper):
     first, second = Basic(lower), Basic(upper)
@@ -75,6 +77,7 @@ def test_native_argument_sort_keys(lower, upper):
 @pytest.mark.parametrize('value, equivalent', [
     (1 + 0j, 1), (0j, False), (0.5 + 0j, Fraction(1, 2)),
     (frozenset([1]), frozenset([True])),
+    ((1,), (True,)), ((1,), (1.0,)),
 ])
 def test_native_argument_sort_key_reconstruction(value, equivalent):
     first = default_sort_key(Basic(value))
@@ -83,8 +86,12 @@ def test_native_argument_sort_key_reconstruction(value, equivalent):
     restored = loads(dumps(first))
     assert first == second == restored
     assert hash(first) == hash(second) == hash(restored)
-    other = default_sort_key(Basic(2 + 1j) if isinstance(value, complex)
-                             else Basic(frozenset([2])))
+    if isinstance(value, complex):
+        other = default_sort_key(Basic(2 + 1j))
+    elif isinstance(value, tuple):
+        other = default_sort_key(Basic((2,)))
+    else:
+        other = default_sort_key(Basic(frozenset([2])))
     assert first < other and second < other and restored < other
 
 
@@ -118,7 +125,7 @@ def test_native_argument_sort_key_storage():
     assert first > other and second > other
 
 
-@pytest.mark.parametrize('base, value', [(complex, 1j), (frozenset, [1])])
+@pytest.mark.parametrize('base, value', [(complex, 1j), (frozenset, [1]), (tuple, [1])])
 def test_native_argument_sort_key_hooks(base, value):
     class Tagged(base):
         def __new__(cls, tag):
@@ -142,6 +149,85 @@ def test_native_argument_sort_key_hooks(base, value):
     assert first.compare(second) == -1
     assert second.compare(first) == 1
     assert default_sort_key(first) < default_sort_key(second)
+
+
+@pytest.mark.parametrize('container', [tuple, lambda value: (value,),
+    lambda value: frozenset([value]), lambda value: (frozenset(value),)])
+@pytest.mark.parametrize('wrap', [lambda value: value,
+    lambda value: Function('tuple_field', value=value)])
+def test_tuple_field_equivalence(container, wrap):
+    fields = [Basic(container((value,))) for value in (1, 1.0, S.One)]
+    groups = (0, 0, 1)
+    for indices in permutations(range(3)):
+        items = []
+        keys = []
+        for i in indices:
+            clear_cache()
+            items.append(wrap(fields[i]))
+            clear_cache()
+            keys.append(default_sort_key(items[-1]))
+        expressions = [item if isinstance(item, Basic) else item(x) for item in items]
+        for i, left in enumerate(items):
+            for j, right in enumerate(items):
+                equal = groups[indices[i]] == groups[indices[j]]
+                assert (left == right) == equal
+                assert (keys[i] == keys[j]) == equal
+                comparison = expressions[i].compare(expressions[j])
+                assert (comparison == 0) == equal
+                assert comparison == -expressions[j].compare(expressions[i])
+                assert comparison == (keys[i] > keys[j]) - (keys[i] < keys[j])
+                if equal:
+                    assert hash(left) == hash(right)
+                    assert hash(keys[i]) == hash(keys[j])
+
+
+def test_tuple_field_partial_order():
+    class TupleValue:
+        def __eq__(self, other):
+            return other == (1,) if type(other) is tuple else NotImplemented
+
+        def __hash__(self):
+            return hash((1,))
+
+        def __lt__(self, other):
+            return False
+
+        __gt__ = __lt__
+
+    first, second = Basic((1,)), Basic(TupleValue())
+    assert first != second
+    expressions = (first, second)
+    keys = [default_sort_key(value) for value in (first, second)]
+    assert keys[0] != keys[1]
+    for a, b in ((0, 1), (1, 0)):
+        with raises(TypeError, match='Cannot order tuple fields with custom equality'):
+            expressions[a].compare(expressions[b])
+        with raises(TypeError, match='Cannot order tuple fields with custom equality'):
+            assert keys[a] < keys[b]
+
+
+def test_native_argument_boolean_comparison():
+    class Value:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            return type(other) is Value and self.value == other.value
+
+        def __hash__(self):
+            return hash(self.value)
+
+        def __lt__(self, other):
+            return S(self.value < other.value)
+
+        def __gt__(self, other):
+            return S(self.value > other.value)
+
+    first, second = Basic(Value(1)), Basic(Value(2))
+    assert first.compare(second) == -1
+    assert second.compare(first) == 1
+    assert default_sort_key(first) < default_sort_key(second)
+    assert default_sort_key(second) > default_sort_key(first)
 
 
 @pytest.mark.parametrize('native, symbolic', [(1, S.One), (1.0, Float(1))])

@@ -136,6 +136,50 @@ def test_frozenset_native_numeric_equivalence():
             assert first.compare(upper) == equivalent.compare(upper) == -1
 
 
+def test_tuple_argument_identity():
+    for wrap in (tuple, lambda value: (tuple(value),),
+                 lambda value: frozenset([tuple(value)]),
+                 lambda value: (frozenset(value),)):
+        first = Basic(wrap((1, 2)))
+        for alias in (True, 1.0, Fraction(1), Decimal(1)):
+            equivalent = Basic(wrap((alias, 2)))
+            assert first == equivalent
+            assert hash(first) == hash(equivalent)
+            assert first.compare(equivalent) == equivalent.compare(first) == 0
+        for symbolic in (S.One, Float(1), S.true):
+            other = Basic(wrap((symbolic, 2)))
+            assert first != other
+            assert first.compare(other) == -other.compare(first) != 0
+
+
+def test_tuple_argument_storage():
+    class StoredTuple(tuple):
+        __slots__ = ()
+
+        def __iter__(self):
+            return iter([2])
+
+        def __len__(self):
+            raise TypeError('stored contents do not use overridden iteration or length')
+
+    first = Basic(StoredTuple((S.One, 9)))
+    equivalent = Basic((S.One, 9))
+    other = Basic((1, 9))
+    assert first == equivalent
+    assert hash(first) == hash(equivalent)
+    assert first != other
+    assert first.compare(equivalent) == 0
+    assert first.compare(other) == equivalent.compare(other) != 0
+
+
+def test_tuple_argument_ordering():
+    for left, right in [((1, 2), (2,)), ((1,), (1, 0)), ((1, 2), (1, 3))]:
+        first, second = Basic(left), Basic(right)
+        assert first.compare(second) == -1
+        assert second.compare(first) == 1
+        assert default_sort_key(first) < default_sort_key(second)
+
+
 def test_frozenset_argument_storage():
     class StoredSet(frozenset):
         def __iter__(self):

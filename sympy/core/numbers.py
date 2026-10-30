@@ -946,6 +946,14 @@ class Float(Number):
     def _hashable_content(self):
         return (self._mpf_, self._prec)
 
+    def compare(self, other):
+        if self is other:
+            return 0
+        if type(self) is Float and type(other) is Float:
+            left, right = self._hashable_content(), other._hashable_content()
+            return (left > right) - (left < right)
+        return super().compare(other)
+
     def floor(self):
         return Integer(int(_to_int(_mpf_floor(self._mpf_, self._prec))))
 
