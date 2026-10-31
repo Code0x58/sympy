@@ -540,43 +540,47 @@ class Basic(Printable):
                     c = bool(lk > rk) - bool(lk < rk)
             elif type(l) is tuple and type(r) is tuple:
                 c = _compare_tuple_args(l, r)
-            elif not (
-                    _has_builtin_equality(l, frozenset) or _has_builtin_equality(r, frozenset)
-                    or _has_builtin_equality(l, tuple) or _has_builtin_equality(r, tuple)) and l == r:
-                c = 0
-            elif (isinstance(l, frozenset) or isinstance(r, frozenset)
-                    or isinstance(l, tuple) and isinstance(r, tuple)):
-                container = (frozenset if isinstance(l, frozenset) or isinstance(r, frozenset)
-                             else tuple)
-                l_builtin = _has_builtin_equality(l, container)
-                r_builtin = _has_builtin_equality(r, container)
-                if l_builtin != r_builtin:
-                    c = -1 if l_builtin else 1
-                elif not l_builtin:
-                    # Custom equality can equate containers with other native types.
-                    c = bool(l > r) - bool(l < r)
-                    if not c:
-                        raise TypeError(f"Cannot order {container.__name__} fields with custom equality")
-                elif container is tuple:
-                    c = _compare_tuple_args(l, r)
-                else:
-                    # Wrapping entries gives native and class fields the same rules.
-                    l, r = _frozenset_args(l), _frozenset_args(r)
-                    if l == r:
-                        c = 0
-                    else:
-                        l, r = sorted(l, key=_args_sortkey), sorted(r, key=_args_sortkey)
-                        c = Basic(*l).compare(Basic(*r))
-            # NaNs must not acquire an order through their components.
-            elif ((type(l) is complex or type(r) is complex)
-                    and _is_standard_number(l) and _is_standard_number(r)
-                    and l == l and r == r):
-                l, r = (l.real, l.imag), (r.real, r.imag)
-                c = (l > r) - (l < r)
             else:
-                c = bool(l > r) - bool(l < r)
-                if not c and _has_builtin_equality(l, tuple) != _has_builtin_equality(r, tuple):
-                    raise TypeError("Cannot order tuple fields with custom equality")
+                l_set_builtin = _has_builtin_equality(l, frozenset)
+                r_set_builtin = _has_builtin_equality(r, frozenset)
+                if not (l_set_builtin or r_set_builtin
+                        or _has_builtin_equality(l, tuple) or _has_builtin_equality(r, tuple)) and l == r:
+                    c = 0
+                elif (isinstance(l, frozenset) or isinstance(r, frozenset)
+                        or isinstance(l, tuple) and isinstance(r, tuple)):
+                    container = (frozenset if isinstance(l, frozenset) or isinstance(r, frozenset)
+                                 else tuple)
+                    l_builtin = (l_set_builtin if container is frozenset
+                                 else _has_builtin_equality(l, container))
+                    r_builtin = (r_set_builtin if container is frozenset
+                                 else _has_builtin_equality(r, container))
+                    if l_builtin != r_builtin:
+                        c = -1 if l_builtin else 1
+                    elif not l_builtin:
+                        # Custom equality can equate containers with other native types.
+                        c = bool(l > r) - bool(l < r)
+                        if not c:
+                            raise TypeError(f"Cannot order {container.__name__} fields with custom equality")
+                    elif container is tuple:
+                        c = _compare_tuple_args(l, r)
+                    else:
+                        # Wrapping entries gives native and class fields the same rules.
+                        l, r = _frozenset_args(l), _frozenset_args(r)
+                        if l == r:
+                            c = 0
+                        else:
+                            l, r = sorted(l, key=_args_sortkey), sorted(r, key=_args_sortkey)
+                            c = Basic(*l).compare(Basic(*r))
+                # NaNs must not acquire an order through their components.
+                elif ((type(l) is complex or type(r) is complex)
+                        and _is_standard_number(l) and _is_standard_number(r)
+                        and l == l and r == r):
+                    l, r = (l.real, l.imag), (r.real, r.imag)
+                    c = (l > r) - (l < r)
+                else:
+                    c = bool(l > r) - bool(l < r)
+                    if not c and _has_builtin_equality(l, tuple) != _has_builtin_equality(r, tuple):
+                        raise TypeError("Cannot order tuple fields with custom equality")
             if c:
                 return c
         return 0
