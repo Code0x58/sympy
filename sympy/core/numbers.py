@@ -946,6 +946,14 @@ class Float(Number):
     def _hashable_content(self):
         return (self._mpf_, self._prec)
 
+    def compare(self, other):
+        if self is other:
+            return 0
+        if type(self) is Float and type(other) is Float:
+            left, right = self._hashable_content(), other._hashable_content()
+            return (left > right) - (left < right)
+        return super().compare(other)
+
     def floor(self):
         return Integer(int(_to_int(_mpf_floor(self._mpf_, self._prec))))
 
@@ -1106,8 +1114,12 @@ class Float(Number):
         return int(_to_int(self._mpf_))  # uses round_fast = round_down
 
     def __eq__(self, other):
+        if self is other:
+            return True
         if isinstance(other, float):
             other = Float(other)
+        if type(self) is Float and type(other) is Float:
+            return self._mpf_ == other._mpf_ and self._prec == other._prec
         return Basic.__eq__(self, other)
 
     def __ne__(self, other):

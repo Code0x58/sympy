@@ -41,7 +41,7 @@ def default_sort_key(item, order=None):
     Here are some examples of the key that is produced:
 
     >>> default_sort_key(UndefinedFunction('f'))
-    ((0, 0, 'UndefinedFunction'), (1, ('f',)), ((1, 0, 'Number'),
+    ((0, 0, 'UndefinedFunction'), (2, ((4, 0, 'f'), ())), ((1, 0, 'Number'),
         (0, ()), (), 1), 1)
     >>> default_sort_key('1')
     ((0, 0, 'str'), (1, ('1',)), ((1, 0, 'Number'), (0, ()), (), 1), 1)
@@ -106,6 +106,10 @@ def default_sort_key(item, order=None):
     The order of terms obtained when using these keys is the order that would
     be obtained if those terms were *factors* in a product.
 
+    Class literals share keys when their equality and hashes agree.
+    Distinct definitions with identical names use their process-local
+    identities to break ties.
+
     Although it is useful for quickly putting expressions in canonical order,
     it does not sort expressions based on their complexity defined by the
     number of operations, power of variables and others:
@@ -121,17 +125,27 @@ def default_sort_key(item, order=None):
     ordered, sympy.core.expr.Expr.as_ordered_factors, sympy.core.expr.Expr.as_ordered_terms
 
     """
-    from .basic import Basic
+    from .basic import Basic, _get_type_attribute
     from .singleton import S
 
     if isinstance(item, Basic):
         return item.sort_key(order=order)
 
-    if iterable(item, exclude=str):
+    cls_name = None
+    if isinstance(item, type):
+        from .function import UndefinedFunction, _class_order_key, _get_comparison_key
+        if isinstance(item, UndefinedFunction):
+            args = (item.class_key(), item._metadata_sort_key)
+        else:
+            cls_name = 'type'
+            args = (_class_order_key(item) if _get_type_attribute(item, '__hash__') is None
+                    else (_get_comparison_key(item),))
+        cls_index, args = 0, (len(args), args)
+    elif iterable(item, exclude=str):
         if isinstance(item, dict):
             args = item.items()
             unordered = True
-        elif isinstance(item, set):
+        elif isinstance(item, (set, frozenset)):
             args = item
             unordered = True
         else:
@@ -154,15 +168,14 @@ def default_sort_key(item, order=None):
                 # e.g. lambda x: x
                 pass
             else:
-                if isinstance(item, Basic):
+                if isinstance(item, (Basic, type)):
                     # e.g int -> Integer
-                    return default_sort_key(item)
-                # e.g. UndefinedFunction
+                    return default_sort_key(item, order=order)
 
         # e.g. str
         cls_index, args = 0, (1, (str(item),))
 
-    return (cls_index, 0, item.__class__.__name__
+    return (cls_index, 0, cls_name or item.__class__.__name__
             ), args, S.One.sort_key(), S.One
 
 

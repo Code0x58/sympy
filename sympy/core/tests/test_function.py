@@ -1,20 +1,27 @@
 from __future__ import annotations
 
 import pytest
+from decimal import Decimal
+from fractions import Fraction
+from functools import partial
+from pickle import dumps, loads
 
 from sympy.concrete.summations import Sum
+from sympy.concrete.products import Product
+from sympy.core.add import Add
 from sympy.core.basic import Basic, _aresame
 from sympy.core.cache import clear_cache
 from sympy.core.containers import Dict, Tuple
-from sympy.core.expr import Expr, unchanged
+from sympy.core.expr import AtomicExpr, Expr, unchanged
 from sympy.core.function import (Subs, Function, diff, Lambda, expand,
-    nfloat, Derivative)
-from sympy.core.numbers import E, Float, zoo, Rational, pi, I, oo, nan
+    nfloat, Derivative, UndefinedFunction)
+from sympy.core.mul import Mul
+from sympy.core.numbers import E, Float, Integer, zoo, Rational, pi, I, oo, nan
 from sympy.core.power import Pow
 from sympy.core.relational import Eq
 from sympy.core.singleton import S
 from sympy.core.symbol import symbols, Dummy, Symbol
-from sympy.functions.elementary.complexes import im, re
+from sympy.functions.elementary.complexes import Abs, im, re, sign
 from sympy.functions.elementary.exponential import log, exp
 from sympy.functions.elementary.miscellaneous import sqrt
 from sympy.functions.elementary.piecewise import Piecewise
@@ -24,13 +31,14 @@ from sympy.functions.special.gamma_functions import loggamma, polygamma
 from sympy.integrals import Integral
 from sympy.matrices.dense import Matrix
 from sympy.printing.str import sstr
+from sympy.printing.printer import Printer
 from sympy.series.order import O
 from sympy.tensor.indexed import Indexed
 from sympy.core.function import (PoleError, _mexpand, arity,
         BadSignatureError, BadArgumentsError)
-from sympy.core.parameters import _exp_is_pow
+from sympy.core.parameters import _exp_is_pow, distribute, evaluate
 from sympy.core.sympify import sympify, SympifyError
-from sympy.matrices import MutableMatrix, ImmutableMatrix
+from sympy.matrices import MutableMatrix, ImmutableMatrix, MatrixSymbol
 from sympy.sets.sets import FiniteSet
 from sympy.sets.fancysets import Range
 from sympy.solvers.solveset import solveset
@@ -41,6 +49,26 @@ from sympy.testing.pytest import XFAIL, raises, warns_deprecated_sympy, _both_ex
 from sympy.abc import t, w, x, y, z
 f, g, h = symbols('f g h', cls=Function)
 _xi_1, _xi_2, _xi_3 = [Dummy() for i in range(3)]
+
+
+class _PickledFunctionSubclass(Function('pickle_subclass_base')):
+    def doit(self, **hints):
+        return S.One
+
+
+class _NameSensitiveSubs(Subs):
+    def doit(self, **hints):
+        return Integer(len(self.variables[0].name))
+
+
+class _HiddenDescriptorMeta(type):
+    __dict__ = property(lambda cls: {})
+
+    def __getattribute__(cls, name):
+        if name in ('__get__', '__set_name__'):
+            raise AttributeError(name)
+        return super().__getattribute__(name)
+
 
 def test_f_expand_complex():
     x = Symbol('x', real=True)
@@ -217,6 +245,53 @@ def test_nargs_inheritance():
     assert f9.nargs == S.Naturals0
     assert f10.nargs == FiniteSet(1)
     assert f11.nargs == FiniteSet(1)
+
+
+@pytest.mark.parametrize('nargs', [[1, 2], [2, 1, 2], (2, 1), Tuple(1, 2)])
+def test_function_nargs_normalization(nargs):
+    function = Function('arity_normalization', nargs=nargs)
+    expected = Function('arity_normalization', nargs=(1, 2))
+    assert function.nargs == FiniteSet(1, 2)
+    assert function == expected
+    assert hash(function) == hash(expected)
+    assert function(x) == expected(x)
+    assert function(x, y) == expected(x, y)
+    raises(TypeError, lambda: function())
+    clear_cache()
+    rebuilt = loads(dumps(function))
+    assert rebuilt == function
+    assert hash(rebuilt) == hash(function)
+
+
+def test_function_nargs_validation():
+    assert Function('unary', nargs=1) == Function('unary', nargs=(1,))
+    for invalid in ([], (), Tuple(), {1, 2}):
+        raises(ValueError, lambda: Function('invalid_arity', nargs=invalid))
+
+
+def test_function_nargs_mutable_input():
+    nargs = [1, 2]
+    function = Function('mutable_arity', nargs=nargs)
+    first_hash = hash(function)
+    nargs.append(3)
+    assert function.nargs == FiniteSet(1, 2)
+    clear_cache()
+    rebuilt = loads(dumps(function))
+    assert rebuilt == function
+    assert hash(rebuilt) == first_hash
+    assert rebuilt.nargs == FiniteSet(1, 2)
+    raises(TypeError, lambda: rebuilt(x, y, z))
+
+
+@pytest.mark.parametrize('value', [[], [1]])
+def test_function_assumption_normalization(value):
+    function = Function('assumption_normalization', real=value)
+    expected = Function('assumption_normalization', real=bool(value))
+    assert function == expected
+    assert hash(function) == hash(expected)
+    assert function(x) == expected(x)
+    assert function.is_real is bool(value)
+
 
 def test_arity():
     f = lambda x, y: 1
@@ -497,9 +572,13 @@ def test_Subs():
     assert Subs(f(x, y), (x, y), (0, 1)).point == Tuple(0, 1)
 
     assert Subs(f(x), x, 0) == Subs(f(y), y, 0)
-    assert Subs(f(x, y), (x, y), (0, 1)) == Subs(f(x, y), (y, x), (1, 0))
-    assert Subs(f(x)*y, (x, y), (0, 1)) == Subs(f(y)*x, (y, x), (0, 1))
-    assert Subs(f(x)*y, (x, y), (1, 1)) == Subs(f(y)*x, (x, y), (1, 1))
+    for first, second in [
+        (Subs(f(x, y), (x, y), (0, 1)), Subs(f(x, y), (y, x), (1, 0))),
+        (Subs(f(x)*y, (x, y), (0, 1)), Subs(f(y)*x, (y, x), (0, 1))),
+        (Subs(f(x)*y, (x, y), (1, 1)), Subs(f(y)*x, (x, y), (1, 1))),
+    ]:
+        assert first != second
+        assert first.doit() == second.doit()
 
     assert Subs(f(x), x, 0).subs(x, 1).doit() == f(0)
     assert Subs(f(x), x, y).subs(y, 0) == Subs(f(x), x, 0)
@@ -540,6 +619,2290 @@ def test_Subs():
     assert Derivative(f(x, g(x)), x).doit() == Derivative(
         f(x, g(x)), g(x))*Derivative(g(x), x) + Subs(Derivative(
         f(y, g(x)), y), y, x)
+
+
+@pytest.mark.parametrize('expr, variables, points, forward, backward', [
+    (f(x), (x, x + y), (x + y, z - 2), f(z - 2), f(x + y)),
+    (f(x), (x, y), (y, z), f(z), f(y)),
+    (f(x + y), (x, x + y), (0, 1), f(y), f(1)),
+    (f(x), (x, 2*x), (2*x, z), f(z), f(2*x)),
+    (f(x**y, x**2), (y, x**2), (2, z), f(z, z), f(x**2, z)),
+    (f(x), (x, y), (Subs(y, y, y), z), f(z), f(y)),
+    (f(x), (x, y, z), (y, z, t), f(t), f(y)),
+    (x/y, (x, y), (0, 0), S.Zero, nan),
+    (x*y, (x, y), (0, oo), S.Zero, nan),
+    (x + y - Float('1e20', 15), (x, y), (Float('1e20', 15), 1), S.One, S.Zero),
+], ids=['compound_point', 'symbol_point', 'overlapping_targets',
+        'affine_target', 'power_target', 'nested_point', 'three_targets',
+        'pole', 'infinite_point', 'rounding'])
+def test_Subs_ordered_identity(expr, variables, points, forward, backward):
+    first = Subs(expr, variables, points)
+    second = Subs(expr, variables[::-1], points[::-1])
+    assert first != second
+    assert first.doit() == forward
+    assert second.doit() == backward
+    assert g(first).doit() == g(forward)
+    assert g(second).doit() == g(backward)
+    assert (first + second).doit() == forward + backward
+
+
+def test_Subs_independent_programs():
+    first = Subs(f(x, y), (x, y), (0, 1))
+    second = Subs(f(x, y), (y, x), (1, 0))
+    renamed = Subs(f(t, z), (t, z), (0, 1))
+    assert len({first, second, renamed}) == 3
+    assert first.doit() == second.doit() == renamed.doit() == f(0, 1)
+    first, second = Subs(f(x**2), x**2, 0), Subs(f(y**2), y**2, 0)
+    assert first != second
+    assert first.free_symbols == {x}
+    assert second.free_symbols == {y}
+    assert first.doit() == second.doit() == f(0)
+
+
+def test_Subs_order_after_function_definition():
+    first = Subs(f(x, y), (x, y), (0, 1))
+    second = Subs(f(x, y), (y, x), (1, 0))
+    assert first != second
+    assert first.doit() == second.doit() == f(0, 1)
+    definition = Lambda((t, z), t/(z - 1))
+    assert first.subs(f, definition).doit() == 0
+    assert second.subs(f, definition).doit() is nan
+
+
+def test_Subs_order_after_point_replacement():
+    first = Subs(x*y, (x, y), (0, 1))
+    second = Subs(x*y, (y, x), (1, 0))
+    assert first != second
+    assert first.doit() == second.doit() == 0
+    assert first.subs(1, oo).doit() == 0
+    assert second.subs(1, oo).doit() is nan
+
+
+def test_Subs_function_order_after_point_replacement():
+    source = Derivative(f(y), y)
+    definition = Lambda(t, x*t)
+    first = Subs(source, (x, f), (0, definition))
+    second = Subs(source, (f, x), (definition, 0))
+    assert first != second
+    assert first.doit() == second.doit() == 0
+    assert first.free_symbols == second.free_symbols == {y}
+    for replacement in (z, z + 1):
+        assert first.subs(x, replacement).doit() == 0
+        assert second.subs(x, replacement).doit() == 0
+
+
+def test_Subs_function_order_after_expression_replacement():
+    source = Derivative(f(y), y)
+    definition = Lambda(t, x + t)
+    first = Subs(source, (x, f), (0, definition))
+    second = Subs(source, (f, x), (definition, 0))
+    assert first != second
+    assert first.doit() == second.doit() == 1
+    assert first.subs(source, f(y)).doit() == x + y
+    assert second.subs(source, f(y)).doit() == y
+
+
+def test_Subs_derivative_reordering_progress():
+    first, second = Dummy('first'), Dummy('second')
+    source = Subs(Derivative(f(first, second, g(x, y)), first, second),
+                  (first, second), (x, y))
+    result = source.doit()
+    assert result.args == source.args
+    assert result.doit() == result
+
+
+@pytest.mark.parametrize('body', [f(x), f(x) + 1])
+@pytest.mark.parametrize('order', [S.One, y])
+@pytest.mark.parametrize('deep', [False, True])
+def test_Subs_deferred_function_progress(body, order, deep):
+    source = Subs(Derivative(body, (x, order)), f, Lambda(t, x*t))
+    assert source.doit(deep=deep) == source
+
+
+@pytest.mark.parametrize('body', [f(x), f(x) + 1])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_Subs_deferred_function_zero_order(body, reverse):
+    replacements = [(f, Lambda(t, x*t)), (y, S.Zero)]
+    if reverse:
+        replacements.reverse()
+    variables, points = zip(*replacements)
+    source = Subs(Derivative(body, (x, y)), variables, points)
+    assert source.doit() == body.subs(f, Lambda(t, x*t))
+
+
+@pytest.mark.parametrize('order', [S.One, y])
+def test_Subs_deferred_function_chain(order):
+    definition = Lambda(t, x*t)
+    source = Subs(Derivative(f(x), (x, order)), (f, g), (g, definition))
+    expected = Subs(Derivative(g(x), (x, order)), g, definition)
+    assert source.doit() == expected
+    assert expected.doit() == expected
+
+
+@pytest.mark.parametrize('source', [
+    Subs(Derivative(f(x), x), x, 0),
+    Subs(Derivative(f(x), x), f, Lambda(t, x*t)),
+])
+@pytest.mark.parametrize('precision', [2, 50])
+@pytest.mark.parametrize('method', ['evalf', 'n'])
+def test_Subs_unresolved_evalf(source, precision, method):
+    assert getattr(source, method)(precision) == source
+
+
+@pytest.mark.parametrize('method', ['evalf', 'n'])
+def test_Subs_numeric_evalf_hook(method):
+    class NumericSubs(Subs):
+        def doit(self, **hints):
+            return self
+
+        def _eval_evalf(self, prec):
+            return pi._evalf(prec)
+
+    source = NumericSubs(f(x), x, 0)
+    assert getattr(source, method)(50) == pi.evalf(50)
+
+
+@pytest.mark.parametrize('precision', [15, 50])
+@pytest.mark.parametrize('method', ['evalf', 'n'])
+def test_Subs_evalf_precision(precision, method):
+    source = Subs(x + y - z, t, 0)
+    result = getattr(source, method)(precision, subs={x: 10**100, y: 1, z: 10**100})
+    assert result == Float(1, precision)
+
+
+@pytest.mark.parametrize('method', ['evalf', 'n'])
+def test_Subs_evalf_options(method):
+    source = Subs(Derivative(f(x), x), x, 0)
+    assert getattr(source, method)(50, subs={source: pi}) == pi.evalf(50)
+    with raises(TypeError, match='subs must be given as a dictionary'):
+        getattr(source, method)(subs=[(x, 1)])
+
+
+def test_Subs_bound_placeholder_identity():
+    variable = Symbol('_1')
+    first = Subs(f(variable, x), (variable, x), (1, 0))
+    second = Subs(f(x, variable), (variable, x), (1, 0))
+    assert first != second
+    assert first.doit() == f(1, 0)
+    assert second.doit() == f(0, 1)
+    first = Subs(f(x), (x, y, variable), (0, 1, 0))
+    second = Subs(f(x), (variable, x, y), (0, 1, 1))
+    assert first != second
+    assert first.doit() == f(0)
+    assert second.doit() == f(1)
+
+
+@pytest.mark.parametrize('variable', [
+    Symbol('r', real=True), Symbol('p', positive=True), Symbol('n', negative=True),
+])
+def test_Subs_formal_derivative_domains(variable):
+    dummy = Dummy()
+    first = Subs(Derivative(f(variable), (variable, 2)), variable, z**2 + 1)
+    second = Subs(Derivative(f(dummy), (dummy, 2)), dummy, z**2 + 1)
+    assert first != second
+
+
+def test_Subs_derivative_domains_after_function_definition():
+    positive, negative = Symbol('p', positive=True), Symbol('n', negative=True)
+    first = Subs(Derivative(f(positive), positive), positive, 0)
+    second = Subs(Derivative(f(negative), negative), negative, 0)
+    assert first != second
+    definition = Lambda(t, Abs(t, evaluate=False))
+    assert first.subs(f, definition).doit() == 1
+    assert second.subs(f, definition).doit() == -1
+
+
+@pytest.mark.parametrize('other', [Symbol('n', negative=True), x])
+def test_Subs_variable_assumptions(other):
+    positive = Symbol('p', positive=True)
+    first = Subs(sign(positive, evaluate=False), positive, 0)
+    second = Subs(sign(other, evaluate=False), other, 0)
+    assert first != second
+    assert first.doit() == 1
+    assert second.doit() == (-1 if other.is_negative else 0)
+    assert (first + second).doit() == first.doit() + second.doit()
+
+
+@pytest.mark.parametrize('variable, point, expected', [
+    (Add(x, -x, evaluate=False), 1, f(0)),
+    (Pow(x, 0, evaluate=False), 0, f(1)),
+    (Pow(2, 10, evaluate=False), 0, f(1024)),
+])
+def test_Subs_held_compound_target(variable, point, expected):
+    first = Subs(f(variable), variable, point)
+    second = Subs(f(y), y, point)
+    assert first != second
+    assert first.doit() == expected
+    assert second.doit() == f(point)
+
+
+def test_Subs_symbol_subclass_target():
+    class EvaluatingSymbol(Symbol):
+        def doit(self, **hints):
+            return S.One
+
+    variable = EvaluatingSymbol('x')
+    first = Subs(f(variable), variable, 0)
+    second = Subs(f(x), x, 0)
+    assert first != second
+    assert first.doit() == f(1)
+    assert second.doit() == f(0)
+
+
+@pytest.mark.parametrize('point, other_point', [
+    (Symbol('a', positive=True), Symbol('a', negative=True)),
+    (Function('a', positive=True)(t), Function('a', negative=True)(t)),
+])
+def test_Subs_point_identity(point, other_point):
+    first = Subs(f(x), x, point)
+    second = Subs(f(x), x, other_point)
+    assert first != second
+    assert first.doit() != second.doit()
+    assert first + second == second + first
+    assert (first + second).doit() == f(point) + f(other_point)
+
+
+def test_Subs_clashing_point_names():
+    positive = Symbol('a', positive=True)
+    negative = Symbol('a', negative=True)
+    first = Subs(f(x, y), (x, y), (positive, negative))
+    second = Subs(f(x, y), (x, y), (negative, positive))
+    assert first != second
+    assert first.doit() == f(positive, negative)
+    assert second.doit() == f(negative, positive)
+
+
+@pytest.mark.parametrize('first_expr, first_target, second_expr, second_target, first_result, second_result', [
+    (f(x + y + z), x + y, f(x + y + z), y + z, f(z), f(x)),
+    (f(x + y, x + y + z), x + y,
+     f(x + z, x + y + z), x + z, f(0, z), f(0, y)),
+])
+def test_Subs_compound_target_identity(first_expr, first_target,
+        second_expr, second_target, first_result, second_result):
+    first = Subs(first_expr, first_target, 0)
+    second = Subs(second_expr, second_target, 0)
+    assert first != second
+    assert first.doit() == first_result
+    assert second.doit() == second_result
+
+
+@pytest.mark.parametrize('point', [Symbol('w', commutative=False), Expr(w)])
+def test_Subs_noncommutative_identity(point):
+    u, v = symbols('u v', commutative=False)
+    first = Subs(f(u*v), u, point)
+    second = Subs(f(v*u), u, point)
+    assert first != second
+    assert first.doit() == f(point*v)
+    assert second.doit() == f(v*point)
+    assert first.doit() != second.doit()
+    assert (first + second).doit() == f(point*v) + f(v*point)
+
+
+def test_Subs_free_placeholder_identity():
+    placeholder = Symbol('_0')
+    first = Subs(x + placeholder, x, 0)
+    second = Subs(2*x, x, 0)
+    assert first != second
+    assert first.doit() == placeholder
+    assert second.doit() == 0
+
+
+def test_Subs_repeated_target_identity():
+    first = Subs(Subs(f(x), x, 0), x, 1)
+    second = Subs(f(x), x, 1)
+    assert first != second
+    assert g(first).doit() == g(f(0))
+    assert g(second).doit() == g(f(1))
+
+
+def test_Subs_ordered_identity_with_nested_points():
+    positive = Symbol('a', positive=True)
+    negative = Symbol('a', negative=True)
+    first_point = Subs(t, t, positive)
+    second_point = Subs(z, z, negative)
+    assert first_point.doit() != second_point.doit()
+    first = Subs(f(x), (x, x + y), (first_point, 0))
+    second = Subs(f(x), (x, x + y), (second_point, 0))
+    assert first != second
+
+
+@pytest.mark.parametrize('variables, points, other_variables, other_points, expected', [
+    ((f, x), (sin, 0), (x, f), (0, sin), S.One),
+    ((x, f, y), (y, sin, z), (f, x, y), (sin, y, z), cos(z)),
+])
+def test_Subs_function_target_identity(variables, points,
+        other_variables, other_points, expected):
+    source = Derivative(f(x), x)
+    first = Subs(source, variables, points)
+    second = Subs(source, other_variables, other_points)
+    assert first != second
+    assert first.doit() == second.doit() == expected
+
+
+@pytest.mark.parametrize('expr, variables, points, other_variables, other_points, forward, backward', [
+    (f(x), (f,), (sin,), (f,), (cos,), sin(x), cos(x)),
+    (f(x), (g, x, y), (sin, y, z), (g, y, x), (sin, z, y), f(z), f(y)),
+    (f(x), (f, g), (g, sin), (g, f), (sin, g), sin(x), g(x)),
+    (Derivative(f(x), x), (f, x), (sin, 0), (f, x), (cos, 0), S.One, S.Zero),
+    (Derivative(f(x), x), (f, x, y), (sin, y, z), (y, x, f),
+     (z, y, sin), cos(z), cos(y)),
+    (f(x, y), (f,), (Lambda((t, z), t + z),), (f,),
+     (Lambda((t, z), t*z),), x + y, x*y),
+    (f(x), (f,), (Function('a', positive=True),), (f,),
+     (Function('a', negative=True),),
+     Function('a', positive=True)(x), Function('a', negative=True)(x)),
+    (f(x), (f,), (Function('a', nargs=1),), (f,),
+     (Function('a', nargs=2),), Function('a', nargs=1)(x), f(x)),
+    (f(x), (Integer, x, y), (1, y, z), (Integer, y, x), (1, z, y), f(z), f(y)),
+    (f(x), (Symbol, x, y), (1, y, z), (Symbol, y, x), (1, z, y), f(z), f(y)),
+], ids=['single_function', 'mixed_targets', 'function_chain', 'derivative',
+        'derivative_chain', 'lambda', 'assumptions', 'arity',
+        'integer_class', 'symbol_class'])
+def test_Subs_class_replacement_identity(expr, variables, points,
+        other_variables, other_points, forward, backward):
+    first = Subs(expr, variables, points)
+    second = Subs(expr, other_variables, other_points)
+    assert first != second
+    assert len({first, second}) == 2
+    assert first.doit() == forward
+    assert second.doit() == backward
+    assert h(first).doit() == h(forward)
+    assert h(second).doit() == h(backward)
+    assert (first + second).doit() == forward + backward
+
+
+def test_Subs_recreated_function_class_identity():
+    first_function = Function('F')
+    first = Subs(first_function(x), first_function, sin)
+    first_hash = hash(first)
+    clear_cache()
+    second_function = Function('F')
+    second = Subs(second_function(x), second_function, sin)
+    assert first == second
+    assert first_hash == hash(second)
+
+
+def test_Subs_class_arguments_substitution():
+    source = Subs(f(x) + y, f, sin)
+    assert source.subs(y, 1) == Subs(f(x) + 1, f, sin)
+    assert source.subs(y, 1).doit() == sin(x) + 1
+    assert source.subs(x, z) == Subs(f(z) + y, f, sin)
+    assert source.subs(sin, cos) == Subs(f(x) + y, f, cos)
+    assert source.subs(sin, cos).doit() == cos(x) + y
+    assert source.subs(g(x), 1) == source
+    source = Subs(f(x) + y, (x, f), (0, sin))
+    assert source.subs(x, z) == source
+    assert source.subs(x, z).doit() == y
+    source = Subs(f(x) + y, (Symbol, f), (1, sin))
+    assert source.subs(y, z) == Subs(f(x) + z, (Symbol, f), (1, sin))
+
+
+def test_Subs_class_points():
+    for point in (f, Symbol):
+        source = Subs(Tuple(x), x, point)
+        assert source.free_symbols == set()
+        assert source.doit() == Tuple(point)
+        assert source.rewrite(exp) == source
+
+    source = Subs(sin(x), f, cos)
+    assert source.rewrite(exp) == Subs(sin(x).rewrite(exp), f, cos)
+
+
+@pytest.mark.parametrize('value, equivalent', [
+    (2, Fraction(2)),
+    (Fraction(1, 10), Rational(1, 10)),
+    (Decimal('0.1'), Rational(1, 10)),
+    ((Fraction(2),), (S(2),)),
+    (frozenset([Fraction(2)]), frozenset([S(2)])),
+    ((Fraction(2),), Tuple(2)),
+    (frozenset([Fraction(1, 10)]), FiniteSet(Rational(1, 10))),
+    ((frozenset([2]),), (FiniteSet(2),)),
+    (frozenset(), S.EmptySet),
+    (True, S.true),
+])
+def test_function_numeric_metadata_ordering(value, equivalent):
+    first = Function('a', value=value)
+    second = Function('a', value=equivalent)
+    other = Function('a', value=1)
+    assert first == second
+    assert hash(first) == hash(second)
+    left = first(x) + other(x)
+    clear_cache()
+    right = second(x) + other(x)
+    assert left == right
+
+
+def test_function_numeric_metadata_reconstruction():
+    value = Decimal('0.1')
+    first = Function('a', value=value)
+    assert first.value is value
+    clear_cache()
+    second = loads(dumps(first))
+    assert first == second
+    assert hash(first) == hash(second)
+    assert type(second.value) is Decimal
+    assert second.value == value
+    assert first != Function('a', value=0.1)
+
+
+def test_function_numeric_metadata_context():
+    first = Function('a', value=2 + 3j)
+    first_hash = hash(first)
+    for context in (evaluate(False), distribute(False), _exp_is_pow(True)):
+        with context:
+            clear_cache()
+            second = Function('a', value=2 + 3j)
+            assert first == second
+            assert first_hash == hash(second)
+
+
+@pytest.mark.parametrize('first_value, second_value', [
+    ((True,), (1,)),
+    ((1.0,), (1,)),
+    (frozenset([True]), frozenset([1])),
+])
+def test_function_numeric_metadata_cache(first_value, second_value):
+    clear_cache()
+    first = Function('a', value=first_value)
+    second = Function('a', value=second_value)
+    clear_cache()
+    rebuilt = Function('a', value=second_value)
+    assert second == rebuilt
+    assert hash(second) == hash(rebuilt)
+    assert first != second
+
+
+@pytest.mark.parametrize('native, symbolic', [
+    (1, S.One), (True, S.true), ((1,), Tuple(1)),
+    (frozenset([1]), frozenset([S.One])),
+    (frozenset([frozenset([1])]), frozenset([frozenset([S.One])])),
+])
+def test_function_basic_metadata_types(native, symbolic):
+    clear_cache()
+    first = Function('basic_metadata_types', value=Basic(native))
+    second = Function('basic_metadata_types', value=Basic(symbolic))
+    assert first != second and second != first
+    assert first(x).func is first
+    assert second(x).func is second
+
+
+@pytest.mark.parametrize('base', [tuple, frozenset])
+@pytest.mark.parametrize('override', [False, True])
+@pytest.mark.parametrize('hide_dict', [False, True])
+def test_function_container_metaclass_equality(base, override, hide_dict):
+    class Meta(type):
+        if hide_dict:
+            __dict__ = property(lambda cls: {})
+
+        def __getattribute__(cls, name):
+            if name == '__eq__':
+                return base.__eq__ if override else object.__eq__
+            return super().__getattribute__(name)
+
+    class Value(base, metaclass=Meta):
+        if override:
+            def __eq__(self, other):
+                return isinstance(other, Value)
+
+            def __hash__(self):
+                return 0
+
+    first = Function('container_metaclass_equality', value=Value([1]))
+    equivalent = Value([2]) if override else base([1])
+    second = Function('container_metaclass_equality', value=equivalent)
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first(x) == second(x)
+
+
+@pytest.mark.parametrize('implementation', [
+    staticmethod(partial(pow, 2)), staticmethod(lambda arg: arg + 1),
+])
+def test_function_shared_callable_metadata(implementation):
+    first = Function('a', _imp_=implementation)
+    first_hash = hash(first)
+    clear_cache()
+    second = Function('a', _imp_=implementation)
+    assert first == second
+    assert first_hash == hash(second)
+    assert first(x).compare(second(x)) == 0
+    assert first(1).evalf() == second(1).evalf() == Float(2)
+
+
+def test_function_metaclass_identity():
+    Metaclass = type('UndefinedFunction', (UndefinedFunction,), {})
+    first = Function('a')
+    second = Metaclass('a')
+    assert first != second
+    assert second != first
+    assert first(x).compare(second(x)) == -second(x).compare(first(x)) != 0
+    assert first(x) + second(x) == second(x) + first(x)
+
+
+def test_function_class_keys_do_not_print():
+    class Meta(UndefinedFunction):
+        def __str__(cls):
+            raise RuntimeError('class printing called')
+
+    class F(Function, metaclass=Meta):
+        pass
+
+    class G(Function, metaclass=Meta):
+        pass
+
+    assert F(x).func is F
+    key = F._metadata_sort_key[0]
+    assert not key < key
+    assert key < G._metadata_sort_key[0]
+
+
+@pytest.mark.parametrize('behavior', ['none', 'eval', 'doit'])
+def test_function_subclass_identity(behavior):
+    def evaluate(cls, *args):
+        return S.One
+
+    def doit(self, **hints):
+        return S.One
+
+    namespace = {'eval': classmethod(evaluate)} if behavior == 'eval' else (
+        {'doit': doit} if behavior == 'doit' else {})
+    base = Function('subclass_identity_base')
+    first = type('F', (base,), namespace.copy())
+    second = type('F', (base,), namespace.copy())
+    ordinary = Function('F')
+    assert len({first, second, ordinary}) == 3
+    for functions in ((first, second, ordinary), (ordinary, second, first)):
+        clear_cache()
+        for function in functions:
+            value = function(x)
+            if function is not ordinary and behavior == 'eval':
+                assert value is S.One
+            else:
+                assert value.func is function
+                if function is not ordinary and behavior == 'doit':
+                    assert value.doit() is S.One
+
+
+def test_function_subclass_pickle():
+    assert loads(dumps(_PickledFunctionSubclass)) is _PickledFunctionSubclass
+    value = loads(dumps(_PickledFunctionSubclass(x)))
+    assert value.func is _PickledFunctionSubclass
+    assert value.doit() is S.One
+
+
+@pytest.mark.parametrize('method', ['eval', 'doit'])
+def test_function_namespace_substitution_identity(method):
+    def evaluate(cls, arg):
+        if arg == x:
+            return S.Zero
+
+    def doit(self, **hints):
+        if self.args == (x,):
+            return S.Zero
+        return Basic.doit(self, **hints)
+
+    handler = classmethod(evaluate) if method == 'eval' else doit
+    function = UndefinedFunction('F', __dict__={method: handler})
+    first = Subs(function(x, evaluate=False), x, 1)
+    second = Subs(function(z), z, 1)
+    assert first != second
+    assert first.doit() == 0
+    assert second.doit() == function(1)
+
+
+@pytest.mark.parametrize('method', ['eval', 'doit'])
+def test_function_namespace_constructor(method):
+    def evaluate(cls, *args):
+        return S.One
+
+    def doit(self, **hints):
+        return S.One
+
+    handler = classmethod(evaluate) if method == 'eval' else doit
+    namespace = {method: handler}
+    first = Function('namespace_constructor', __dict__=namespace.copy())
+    second = Function('namespace_constructor', __dict__=namespace.copy())
+    assert first != second
+    assert first(x).doit() is S.One
+    assert second(x).doit() is S.One
+    if method == 'doit':
+        assert first(x).func is first
+        assert second(x).func is second
+
+
+def test_function_empty_namespace_constructor():
+    ordinary = Function('empty_namespace')
+    empty = Function('empty_namespace', __dict__={})
+    omitted = Function('empty_namespace', __dict__=None)
+    assert ordinary == empty == omitted
+    assert hash(ordinary) == hash(empty) == hash(omitted)
+    assert ordinary(x) == empty(x) == omitted(x)
+
+
+@pytest.mark.parametrize('namespace', [None, {}, {'tag': 'namespace'}])
+def test_function_namespace_metadata_types(namespace):
+    clear_cache()
+    first = Function('namespace_metadata', __dict__=namespace, value=(True,))
+    second = Function('namespace_metadata', __dict__=namespace, value=(1,))
+    assert first != second
+    assert first.value == (True,)
+    assert type(first.value[0]) is bool
+    assert type(second.value[0]) is int
+    assert first(x).func is first
+    assert second(x).func is second
+
+
+@pytest.mark.parametrize('positional', [False, True])
+@pytest.mark.parametrize('values', [(1, S.One), (Fraction(1, 10), Rational(1, 10))])
+def test_function_explicit_base_identity(positional, values):
+    clear_cache()
+    bases = [UndefinedFunction('explicit_base', value=value) for value in values]
+    assert bases[0] == bases[1]
+    derived = [Function('derived', (base,)) if positional else
+               Function('derived', bases=(base,)) for base in bases]
+    assert derived[0] is not derived[1]
+    for function, base in zip(derived, bases):
+        assert function.__bases__ == (base,)
+        assert function.__bases__[0] is base
+
+
+@pytest.mark.parametrize('constructor', [Function, UndefinedFunction])
+@pytest.mark.parametrize('method', ['eval', 'doit', '_imp_', '_imp_classmethod'])
+@pytest.mark.parametrize('values', [
+    (Fraction(1, 10), Rational(1, 10)), (((1,),), ((S.One,),)),
+])
+def test_function_keyword_method_identity(constructor, method, values):
+    def evaluate(cls, *args):
+        value = cls.value
+        while isinstance(value, tuple):
+            value = value[0]
+        return S.Zero if type(value) in (int, Fraction) else S.One
+
+    def apply(self, *args, **hints):
+        return evaluate(self.func)
+
+    key = '_imp_' if method == '_imp_classmethod' else method
+    handler = classmethod(evaluate) if method in ('eval', '_imp_classmethod') else apply
+    first, second = [constructor('keyword_method', value=value, **{key: handler})
+                     for value in values]
+    for functions in (((first, 0), (second, 1)), ((second, 1), (first, 0))):
+        clear_cache()
+        for function, expected in functions:
+            value = function(1)
+            result = value.evalf() if key == '_imp_' else value.doit()
+            assert int(result) == expected
+    assert first != second
+    assert len({first, second}) == 2
+
+
+@pytest.mark.parametrize('constructor', [Function, UndefinedFunction])
+@pytest.mark.parametrize('metaclass', [type, _HiddenDescriptorMeta])
+def test_function_unhashable_keyword_descriptor(constructor, metaclass):
+    class Evaluator(metaclass=metaclass):
+        __hash__ = None
+
+        def __get__(self, instance, owner):
+            return lambda arg: owner.value[0]
+
+    function = constructor('unhashable_descriptor', eval=Evaluator(), value=[S.One])
+    assert function(x) is S.One
+
+
+@pytest.mark.parametrize('constructor', [Function, UndefinedFunction])
+@pytest.mark.parametrize('method', ['eval', 'doit', '_imp_'])
+def test_function_hidden_keyword_descriptor(constructor, method):
+    class Evaluator:
+        def __get__(self, instance, owner):
+            return lambda *args, **hints: S.Zero if type(owner.value) is int else S.One
+
+    class HiddenEvaluator(Evaluator, metaclass=_HiddenDescriptorMeta):
+        pass
+
+    handler = HiddenEvaluator()
+    first, second = [constructor('hidden_keyword_descriptor', value=value, **{method: handler})
+                     for value in (1, S.One)]
+    for functions in (((first, 0), (second, 1)), ((second, 1), (first, 0))):
+        clear_cache()
+        for function, expected in functions:
+            value = function(1)
+            result = value.evalf() if method == '_imp_' else value.doit()
+            assert int(result) == expected
+    assert first != second
+    assert len({first, second}) == 2
+
+
+@pytest.mark.parametrize('constructor', [Function, UndefinedFunction])
+@pytest.mark.parametrize('hook', ['__new__', '__set_name__'])
+def test_function_owner_hooks(constructor, hook):
+    class OwnerHook(metaclass=_HiddenDescriptorMeta):
+        if hook == '__new__':
+            def __call__(self, owner, *args, **kwargs):
+                return S.Zero if type(owner.value) is int else S.One
+        else:
+            def __set_name__(self, owner, name):
+                owner.eval = classmethod(
+                    lambda cls, *args: S.Zero if type(cls.value) is int else S.One)
+
+    name = '__new__' if hook == '__new__' else 'owner_hook'
+    options = {name: OwnerHook()}
+    first, second = [constructor('owner_hooks', value=value, **options) for value in (1, S.One)]
+    for functions in (((first, 0), (second, 1)), ((second, 1), (first, 0))):
+        clear_cache()
+        for function, expected in functions:
+            assert function(x) == expected
+    assert first != second
+    left, right = Subs(f(x), f, first), Subs(f(x), f, second)
+    assert left != right
+    assert left.doit() == 0
+    assert right.doit() == 1
+
+
+@pytest.mark.parametrize('name', ['key', 'metadata_key'])
+def test_function_metadata_keyword_names(name):
+    first = Function('a', **{name: 1})
+    assert getattr(first, name) == 1
+    assert first != Function('a', **{name: 2})
+    clear_cache()
+    rebuilt = Function('a', **{name: 1})
+    assert first == rebuilt
+    assert hash(first) == hash(rebuilt)
+
+
+def test_function_metadata_keyword_order():
+    class Keyword(str):
+        __slots__ = ()
+
+        def __lt__(self, other):
+            raise TypeError('keyword names do not define an order')
+
+    kwargs = {Keyword('first'): 1, Keyword('second'): 2}
+    first = Function('a', **kwargs)
+    assert (first.first, first.second) == (1, 2)
+    clear_cache()
+    second = Function('a', **dict(reversed(list(kwargs.items()))))
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first(x).compare(second(x)) == 0
+
+
+@pytest.mark.parametrize('base, args', [
+    (tuple, ([2],)), (frozenset, ([2],)), (Tuple, (2,)), (FiniteSet, (2,)),
+])
+def test_function_identity_metadata_containers(base, args):
+    container = type('IdentityContainer', (base,), {
+        '__eq__': object.__eq__, '__hash__': object.__hash__})
+    first = Function('a', value=container(*args))
+    second = Function('a', value=container(*args))
+    assert first != second
+    assert first(x) + second(x) == second(x) + first(x)
+    left = Subs(f(x), f, first)
+    right = Subs(f(x), f, second)
+    assert left + right == right + left
+
+
+@pytest.mark.parametrize('base', [tuple, frozenset])
+def test_function_metadata_container_storage(base):
+    class Container(base):
+        __slots__ = ()
+
+        def __iter__(self):
+            return iter([2])
+
+        def __len__(self):
+            raise TypeError('iteration and length do not expose stored contents')
+
+    value = Container([1])
+    first = Function('a', value=value)
+    equivalent = Function('a', value=base([1]))
+    second = Function('a', value=base([2]))
+    assert first.value is value
+    assert first == equivalent
+    assert hash(first) == hash(equivalent)
+    assert first != second
+    assert first(x) + second(x) == second(x) + first(x)
+    clear_cache()
+    rebuilt = Function('a', value=Container([1]))
+    assert first == rebuilt
+    assert hash(first) == hash(rebuilt)
+
+
+@pytest.mark.parametrize('base', [Tuple, FiniteSet])
+def test_function_metadata_container_subclasses(base):
+    class Container(base):
+        pass
+
+    first = Function('a', value=base(x))
+    second = Function('a', value=Container(x))
+    assert first != second
+    assert first(x) + second(x) == second(x) + first(x)
+
+
+@pytest.mark.parametrize('base', [Tuple, FiniteSet])
+def test_function_metadata_container_identity_fields(base):
+    class Container(base):
+        __eq__ = Basic.__eq__
+        __hash__ = Basic.__hash__
+
+        def _hashable_content(self):
+            return self.args + (self.tag,)
+
+    left, right = Container(x), Container(x)
+    left.tag, right.tag = 1, 2
+    first = Function('a', value=left)
+    second = Function('a', value=right)
+    assert first != second
+    assert first(x) + second(x) == second(x) + first(x)
+    clear_cache()
+    equivalent = Container(x)
+    equivalent.tag = 1
+    rebuilt = Function('a', value=equivalent)
+    assert first == rebuilt
+    assert hash(first) == hash(rebuilt)
+    assert first(x) + second(x) == rebuilt(x) + second(x)
+
+
+def test_function_metadata_container_key_collision():
+    class IdentityTuple(tuple):
+        __slots__ = ()
+        __eq__ = object.__eq__
+        __hash__ = object.__hash__
+
+    class TupleValue:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            if isinstance(other, TupleValue):
+                other = other.value
+            return self.value == other
+
+        def __hash__(self):
+            return hash(self.value)
+
+        def __repr__(self):
+            return repr(self.value)
+
+    first = Function('a', value=(1,))
+    for cls in (IdentityTuple, TupleValue):
+        second = Function('a', value=cls((Tuple, (S.One,))))
+        assert first != second
+        assert len({first, second}) == 2
+        assert first(x) + second(x) == second(x) + first(x)
+
+
+def test_function_numeric_subclass_metadata():
+    class TaggedRational(Rational):
+        __eq__ = Basic.__eq__
+        __hash__ = Basic.__hash__
+
+        def _hashable_content(self):
+            return super()._hashable_content() + (self.tag,)
+
+    left = TaggedRational(3, 5)
+    left.tag = Symbol('left')
+    clear_cache()
+    right = TaggedRational(3, 5)
+    right.tag = Symbol('right')
+    first = Function('a', value=left)
+    second = Function('a', value=right)
+    assert first != second
+    assert first(x) + second(x) == second(x) + first(x)
+
+
+@pytest.mark.parametrize('base, args', [
+    (int, (1,)), (float, (1.5,)), (complex, (2, 3)),
+    (Fraction, (3, 5)), (Decimal, ('0.1',)),
+])
+def test_function_native_numeric_subclass_metadata(base, args):
+    class TaggedNumber(base):
+        def __eq__(self, other):
+            return (type(self) is type(other) and base.__eq__(self, other)
+                    and self.tag == other.tag)
+
+        def __hash__(self):
+            return hash((base.__hash__(self), self.tag))
+
+    left, right, equivalent = [TaggedNumber(*args) for _ in range(3)]
+    left.tag, right.tag, equivalent.tag = 'left', 'right', 'left'
+    first = Function('a', value=left)
+    second = Function('a', value=right)
+    assert first != second
+    assert len({first, second}) == 2
+    assert first(x) + second(x) == second(x) + first(x)
+    clear_cache()
+    rebuilt = Function('a', value=equivalent)
+    assert first == rebuilt
+    assert hash(first) == hash(rebuilt)
+    assert first(x) + second(x) == rebuilt(x) + second(x)
+
+
+@pytest.mark.parametrize('first_function, second_function', [
+    (sin, cos),
+    (Function('a'), Function('b')),
+    (Function('a', nargs=1), Function('a', nargs=2)),
+    (Function('a', positive=True), Function('a', negative=True)),
+    (Function('a', value=Symbol('s', positive=True)),
+     Function('a', value=Symbol('s', negative=True))),
+    (Function('a', value=Float(1, 10)), Function('a', value=Float(1, 20))),
+    (Function('a', _imp_=partial(pow, 2)), Function('a', _imp_=partial(pow, 2))),
+])
+def test_Subs_function_replacement_ordering(first_function, second_function):
+    first = Subs(f(x), f, first_function)
+    second = Subs(f(x), f, second_function)
+    assert first != second
+    assert first + second == second + first
+    assert first * second == second * first
+    assert str(first + second) == str(second + first)
+    assert (first + second).as_ordered_terms() == (second + first).as_ordered_terms()
+
+
+def test_Subs_symbol_class_target_identity():
+    positive = Symbol('a', positive=True)
+    negative = Symbol('a', negative=True)
+    first = Subs(f(x, y), (Symbol, x, y), (0, positive, negative))
+    second = Subs(f(x, y), (Symbol, x, y), (0, negative, positive))
+    assert first != second
+    assert first.doit() == f(positive, negative)
+    assert second.doit() == f(negative, positive)
+    assert h(first).doit() == h(f(positive, negative))
+    assert h(second).doit() == h(f(negative, positive))
+
+
+def test_Subs_self_mappings():
+    source = Derivative(sin(x + y), x)
+    first = Subs(source, (f, x, y), (f, x, 0))
+    second = Subs(source, (x, y, f), (x, 0, f))
+    assert first != second
+    assert first.doit() == second.doit() == cos(x)
+
+
+@pytest.mark.parametrize('variable', [x, Symbol('_0'), Symbol('r', real=True)])
+def test_Subs_as_dummy_preserves_free_points(variable):
+    source = Subs(f(variable), variable, variable)
+    result = source.as_dummy()
+    assert result.free_symbols == source.free_symbols == {variable}
+    assert result.doit() == source.doit()
+    assert result.as_dummy() == result
+
+
+def test_Subs_ordered_free_symbols():
+    for source, expected in [
+        (Subs(f(x), (x, y), (y, 0)), set()),
+        (Subs(f(x), (x, y), (y, z)), {z}),
+        (Subs(f(y), (y, x), (x, 1)), set()),
+        (Subs(f(y), (x, y), (1, x)), {x}),
+        (Subs(f(x, y), (x, y), (x, y + 1)), {x, y}),
+    ]:
+        assert source.free_symbols == expected
+        canonical = source.as_dummy()
+        assert canonical.free_symbols == expected
+        assert canonical.doit() == source.doit()
+
+
+@pytest.mark.parametrize('variable, point, canonical', [
+    (x, y, Symbol('_0')), (x, x, Symbol('_0')),
+    (Symbol('_0'), Symbol('_0'), Symbol('_1')),
+    (x, Symbol('_0'), Symbol('_1')),
+    (Symbol('_0'), x, Symbol('_0')),
+    (y, y, Symbol('_0')),
+])
+def test_Subs_canonical_bound_structure(variable, point, canonical):
+    source = Subs(f(variable), variable, point)
+    result = source.as_dummy()
+    assert result.variables == (canonical,)
+    assert result.expr == f(canonical)
+    assert result.point == (point,)
+    assert result.free_symbols == {point}
+    assert result.doit() == source.doit()
+
+
+@pytest.mark.parametrize('point', [x, Symbol('_0')])
+@pytest.mark.parametrize('wrap', [lambda value: value, Tuple, g])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_Subs_free_query_cache(point, wrap, reverse):
+    clear_cache()
+    first = wrap(Subs(f(x), x, point))
+    clear_cache()
+    second = wrap(Subs(f(z), z, point))
+    assert first == second
+    sources = [first, second]
+    if reverse:
+        sources.reverse()
+    clear_cache()
+    for source in sources:
+        assert source.has_free(point)
+        assert source.has_xfree({point})
+        assert not source.has_free(f(x), f(z))
+        assert not source.has_xfree({f(x), f(z)})
+
+
+@pytest.mark.parametrize('constructor', [Integral, Sum, Product])
+def test_binding_canonical_names_preserve_free_occurrences(constructor):
+    variable, canonical = symbols('_0 _1')
+    source = constructor(variable, (variable, 1, variable))
+    assert source.canonical_variables == {variable: canonical}
+    assert source.has_free(variable)
+    assert source.has_xfree({variable})
+
+
+@pytest.mark.parametrize('constructor', [Integral, Sum, Product])
+@pytest.mark.parametrize('variable', [f(x), Indexed('a', x)])
+def test_compound_binding_canonical_names(constructor, variable):
+    free, canonical = symbols('_0 _1')
+    source = constructor(variable, (variable, 1, free))
+    assert source.canonical_variables == {variable: canonical}
+    assert list(source.as_dummy().bound_symbols) == [canonical]
+    assert source.has_free(free)
+    assert source.has_xfree({free})
+    assert not source.has_free(canonical)
+
+
+@pytest.mark.parametrize('variable', [f(x), Indexed('a', x), MatrixSymbol('M', 2, 2)])
+def test_Subs_compound_binding_canonical_names(variable):
+    free, canonical = symbols('_0 _1')
+    source = Subs(variable, variable, free)
+    assert source.canonical_variables == {variable: canonical}
+    assert source.as_dummy().variables == (canonical,)
+    assert source.has_free(free)
+    assert source.has_xfree({free})
+    assert not source.has_free(canonical)
+
+
+@pytest.mark.parametrize('point', [MatrixSymbol('_0', 2, 2), MatrixSymbol('_0', 2, 2)[0, 0]])
+@pytest.mark.parametrize('wrap', [lambda value: value, Tuple, g])
+def test_Subs_matrix_free_names(point, wrap):
+    free, canonical = symbols('_0 _1')
+    source = Subs(f(x), x, point)
+    assert source.canonical_variables == {x: canonical}
+    assert source.as_dummy().variables == (canonical,)
+    wrapped = wrap(source)
+    assert wrapped.has_free(point)
+    assert wrapped.has_xfree({point})
+    assert not wrapped.has_free(x, free, canonical)
+    assert not wrapped.has_xfree({x, free, canonical})
+
+
+def test_Subs_unnamed_free_object():
+    class FreeAtom(AtomicExpr):
+        @property
+        def free_symbols(self):
+            return {self}
+
+    point = FreeAtom()
+    source = Subs(f(x), x, point)
+    canonical = Symbol('_0')
+    assert source.canonical_variables == {x: canonical}
+    assert source.as_dummy().variables == (canonical,)
+    assert source.has_free(point)
+    assert not source.has_free(canonical)
+
+
+@pytest.mark.parametrize('variable', [f(Symbol('_0')), Indexed('a', Symbol('_0'))])
+@pytest.mark.parametrize('wrap', [lambda value: value, Tuple, g])
+def test_Subs_compound_free_query_labels(variable, wrap):
+    source = wrap(Subs(variable, variable, y))
+    first, second = symbols('_0 _1')
+    assert source.has_free(y)
+    assert not source.has_free(first, second)
+    assert not source.has_xfree({first, second})
+
+
+def test_canonical_free_name_error():
+    class FreeAtom(AtomicExpr):
+        @property
+        def free_symbols(self):
+            return {self}
+
+        @property
+        def name(self):
+            raise ValueError('free symbol name failed')
+
+    source = Subs(f(x), x, FreeAtom())
+    with raises(ValueError, match='free symbol name failed'):
+        source.canonical_variables
+    with raises(ValueError, match='free symbol name failed'):
+        source.as_dummy()
+
+
+@pytest.mark.parametrize('outer', [
+    Lambda, lambda variable, expr: Subs(expr, variable, 0),
+    lambda variable, expr: Integral(expr, (variable, 0, 1)),
+])
+@pytest.mark.parametrize('free', [z, Symbol('_0'), Symbol('_1')])
+@pytest.mark.parametrize('depends_on_outer', [False, True])
+def test_nested_binding_free_queries(outer, free, depends_on_outer):
+    inner = Lambda(y, y + z + (x if depends_on_outer else 0))
+    source = outer(x, Tuple(free, inner))
+    expected = {free, z}
+    assert source.free_symbols == expected
+    for query in (x, y, z, *symbols('_0:4')):
+        assert source.has_xfree({query}) == (query in expected)
+        assert source.has_free(query) == (query in expected)
+    assert not source.has_xfree({Tuple(label) for label in symbols('_0:4')})
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, Basic, Tuple, g])
+@pytest.mark.parametrize('simultaneous', [False, True])
+@pytest.mark.parametrize('mapping', [False, True])
+def test_replace_equal_binding_structure(wrap, simultaneous, mapping):
+    original = Subs(f(x), x, y)
+    replacement = Subs(f(z), z, y)
+    source = wrap(original)
+    clear_cache()
+    result = source.replace(lambda node: node == original,
+        lambda node: replacement, simultaneous=simultaneous, map=mapping)
+    if mapping:
+        result, changes = result
+        assert len(changes) == 1
+        assert changes[original] is replacement
+    assert _aresame(result, wrap(replacement))
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, Basic, Tuple, g])
+@pytest.mark.parametrize('simultaneous', [False, True])
+def test_replace_rebuilds_equal_binding(wrap, simultaneous):
+    source = wrap(Subs(f(x), x, y))
+    clear_cache()
+    result = source.replace(x, z, simultaneous=simultaneous)
+    assert _aresame(result, wrap(Subs(f(z), z, y)))
+
+
+@pytest.mark.parametrize('source, value', [
+    (S.Zero, 0), (S.One, 1), (S.true, True), (S.false, False),
+    (Float(1), 1.0),
+])
+@pytest.mark.parametrize('mapping', [False, True])
+def test_replace_equivalent_native_scalar(source, value, mapping):
+    result = source.replace(lambda node: node == source, lambda node: value, map=mapping)
+    if mapping:
+        result, changes = result
+        assert changes == {}
+    assert result is source
+
+
+@pytest.mark.parametrize('variable', [x, z, Symbol('_0'), Dummy('bound')])
+@pytest.mark.parametrize('point', [S.Zero, y, x])
+def test_Subs_function_replacement_preserves_free_symbols(variable, point):
+    source = Subs(f(variable), variable, point)
+    result = source.subs(f, Lambda(t, x*t))
+    assert result.doit() == x*point
+    assert result.free_symbols == {x} | point.free_symbols
+
+
+@pytest.mark.parametrize('variable', [x, z, Symbol('p', positive=True)])
+@pytest.mark.parametrize('point', [S.Zero, y, x])
+def test_Subs_derivative_function_replacement_scope(variable, point):
+    source = Subs(Derivative(f(variable), variable), variable, point)
+    result = source.subs(f, Lambda(t, x*t + t**2))
+    assert result.doit() == x + 2*point
+
+
+def test_Subs_bound_expression_patterns():
+    for variable in (x, z):
+        source = Subs(f(variable), variable, y)
+        clear_cache()
+        assert source.subs(f(x), z).doit() == f(y)
+        source = Subs(variable**2, variable, 0)
+        clear_cache()
+        assert source.subs(x**2, z).doit() == 0
+    assert Subs(f(x), x, f(x)).subs(f(x), z).doit() == f(z)
+
+
+@pytest.mark.parametrize('pattern', [
+    Integral(f(x), (x, 0, 1)),
+    Sum(f(x), (x, 0, 1)),
+    Product(f(x), (x, 1, 2)),
+    Subs(z, x, 0),
+    Lambda(x, x**2),
+])
+@pytest.mark.parametrize('wrap', [lambda value: value, g])
+@pytest.mark.parametrize('simultaneous', [False, True])
+def test_Subs_nested_bound_expression_patterns(pattern, wrap, simultaneous):
+    pattern = wrap(pattern)
+    source = Subs(pattern + f(x), x, 0)
+    assert source.subs(pattern, y, simultaneous=simultaneous).doit() == y + f(0)
+
+
+@pytest.mark.parametrize('binding, value', [
+    (lambda v: Integral(v, (Symbol('_0'), 0, 1)), Rational(1, 3)),
+    (lambda v: Sum(v, (Symbol('_0'), 0, 1)), S.One),
+    (lambda v: Product(v, (Symbol('_0'), 1, 2)), Integer(4)),
+])
+def test_Subs_nested_binding_label_collision(binding, value):
+    local = Symbol('_0')
+    first = Subs(f(x) + binding(x*local), x, 0)
+    second = Subs(f(x) + binding(local**2), x, 0)
+    assert first != second
+    assert first.doit() == f(0)
+    assert second.doit() == f(0) + value
+
+
+@pytest.mark.parametrize('binding', [
+    lambda v: Integral(h(v), (v, 0, 1)),
+    lambda v: Sum(h(v), (v, 0, 1)),
+    lambda v: Product(h(v), (v, 1, 2)),
+])
+def test_Subs_nested_binding_pattern_identity(binding):
+    first = Subs(f(x) + g(binding(x)), x, 0)
+    second = Subs(f(z) + g(binding(z)), z, 0)
+    assert first != second
+    pattern = binding(x)
+    assert first.subs(pattern, y).doit() == f(0) + g(y)
+    assert second.subs(pattern, y).doit() != f(0) + g(y)
+
+
+@pytest.mark.parametrize('variables', [(x, z), (Dummy('x'), Dummy('z'))])
+def test_Subs_indefinite_integral_identity(variables):
+    first, second = [
+        Subs(Integral(0, t) + Integral(1, v), v, f(y)) for v in variables]
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first.doit() == second.doit() == f(y)
+
+
+def test_Subs_function_replacement_cache():
+    first, second = Subs(f(x), x, y), Subs(f(z), z, y)
+    assert first == second
+    for sources in [(first, second), (second, first)]:
+        clear_cache()
+        for source in sources:
+            assert source.subs(f, Lambda(t, x*t)).doit() == x*y
+            assert source.subs(f(x), z).doit() == f(y)
+
+
+def test_Subs_pattern_scope_cache():
+    first, second = Subs(f(x), x, 0), Subs(f(z), z, 0)
+    source = Subs(x + g(second), x, 0)
+    assert first == second
+    for pattern in (first, second):
+        clear_cache()
+        pattern.has(x)
+        assert source.subs(second, 1).doit() == g(1)
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, Tuple, g])
+def test_Subs_equal_request_replacement(wrap):
+    first, second = Subs(f(x), x, 0), Subs(f(z), z, 0)
+    assert first == second
+    for source, pattern in [(first, second), (second, first)]:
+        clear_cache()
+        wrapped_source = wrap(source)
+        clear_cache()
+        assert wrapped_source.subs(wrap(pattern), y) == y
+        assert Subs(g(x), x, source).subs(pattern, 1).doit() == g(1)
+
+
+@pytest.mark.parametrize('warm_parent', [False, True])
+def test_Subs_equal_request_replacement_in_parent(warm_parent):
+    clear_cache()
+    first, second = Subs(f(x), x, 0), Subs(f(z), z, 0)
+    if warm_parent:
+        g(first)
+    source = Subs(x + g(second), x, 0)
+    for pattern in (first, second):
+        clear_cache()
+        assert source.subs(pattern, 1).doit() == g(1)
+
+
+def test_Subs_hash_structural_cache():
+    first, second = Tuple(Subs(f(x), x, 0)), Tuple(Subs(f(z), z, 0))
+    assert first == second
+    source = Subs(first, x, 1)
+    other = source.func(*source.args)
+    clear_cache()
+    assert not second.has(x)
+    source_hash = hash(source)
+    clear_cache()
+    assert first.has(x)
+    assert hash(other) == source_hash
+    assert source == other
+
+
+@pytest.mark.parametrize('source, old, new, expected', [
+    (Subs(x + y, x, 0), y, x, x),
+    (Subs(x + 4*y, x, 0), 2*y, x, 2*x),
+    (Subs(x + y, x, 0), x + y, z, y),
+])
+@pytest.mark.parametrize('simultaneous', [False, True])
+def test_Subs_expression_replacement_scope(source, old, new, expected, simultaneous):
+    assert source.subs(old, new, simultaneous=simultaneous).doit() == expected
+
+
+@pytest.mark.parametrize('variables, points', [
+    ((x, y), (0, 1)), ((y, x), (1, 0)),
+    ((x, y), (y, 1)), ((y, x), (x, 0)),
+])
+@pytest.mark.parametrize('simultaneous', [False, True])
+def test_Subs_multiple_symbol_replacement_scope(variables, points, simultaneous):
+    source = Subs(f(x, y) + z, variables, points)
+    result = source.subs(z, x + y, simultaneous=simultaneous)
+    assert result.doit() == source.doit().subs(z, x + y)
+    assert result.free_symbols == {x, y}
+
+
+def test_Subs_multiple_symbol_function_scope():
+    source = Subs(f(x, y), (x, y), (0, 1))
+    definition = Lambda((z, t), x*z + y*t)
+    assert source.subs(f, definition).doit() == y
+    assert source.subs(f(x, y), z).doit() == f(0, 1)
+
+
+def test_Subs_multiple_symbol_point_scope():
+    source = Subs(f(x, y), (x, y), (z, 1))
+    result = source.subs(z, y)
+    assert result.doit() == f(y, 1)
+    assert result.free_symbols == {y}
+
+
+@pytest.mark.parametrize('variables, points', [
+    ((x, y), (y, 1)),
+    ((x, y, t), (y, t, 1)),
+    ((x, t, y), (t, y, 1)),
+])
+@pytest.mark.parametrize('simultaneous', [False, True])
+def test_Subs_binding_introduced_by_point_scope(variables, points, simultaneous):
+    source = Subs(f(x) + z, variables, points)
+    replacement = Add(*variables)
+    result = source.subs(z, replacement, simultaneous=simultaneous)
+    assert result.doit() == f(1) + replacement
+    assert result.free_symbols == set(variables)
+
+
+def test_Subs_binding_introduced_by_point_definition():
+    source = Subs(f(x), (x, y), (y, 1))
+    assert source.subs(f, Lambda(t, y*t)).doit() == y
+
+
+def test_Subs_unused_binding_remains_reactive():
+    source = Subs(x, (t, y), (y, 1))
+    assert source.subs(x, y).doit() == 1
+
+
+def test_Subs_unused_binding_preserves_active_names():
+    class Named(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == x:
+                return S.Zero
+
+    source = Subs(f(x) + z, (x, y), (0, 1))
+    assert source.subs(z, y).subs(f, Named).doit() == 1
+
+
+@pytest.mark.parametrize('count', [1, 2])
+def test_Subs_unrelated_replacement_does_not_inspect_points(count):
+    class Point(Expr):
+        @property
+        def free_symbols(self):
+            raise ValueError('point free symbols')
+
+    source = Subs(f(x), (x, y)[:count], (Point(), 1)[:count])
+    assert source.subs(z, t) == source
+
+
+def test_Subs_point_edit_preserves_evaluator_binding():
+    class Named(Expr):
+        def doit(self, **hints):
+            return S.Zero if self.args == (x,) else S.One
+
+    source = Subs(Named(x), x, z)
+    assert source.subs(z, x).doit() == 0
+
+
+def test_Subs_multiple_symbols_preserve_opaque_evaluator():
+    class Named(Expr):
+        def doit(self, **hints):
+            return S.Zero if self.args == (x,) else S.One
+
+    class Zero(Expr):
+        def doit(self, **hints):
+            return S.Zero
+
+    source = Subs(Named(x) + z, (x, y), (0, 1))
+    assert source.subs(z, Zero(x)).doit() == 0
+
+
+def test_Subs_multiple_symbols_preserve_definition_evaluator():
+    class DetectDummy(Expr):
+        def doit(self, **hints):
+            return S.Zero if self.args[0].is_Dummy else S.One
+
+    source = Subs(f(x, y), (x, y), (0, 1))
+    definition = Lambda((z, t), DetectDummy(z) + x*z)
+    assert source.subs(f, definition).doit() == 1
+
+
+def test_Subs_multiple_symbols_preserve_point_hooks():
+    class Point(Expr):
+        def _eval_subs(self, old, new):
+            if old == y:
+                return S.Zero
+            if isinstance(old, Dummy):
+                return S.One
+
+    class Zero(Expr):
+        def doit(self, **hints):
+            return S.Zero
+
+    source = Subs(f(x, y) + z, (x, y), (Point(x), 1))
+    assert source.subs(z, Zero(x)).doit() == f(0, 1)
+
+
+def test_Subs_multiple_symbols_preserve_replacement_hooks():
+    class Replacement(Expr):
+        def _eval_subs(self, old, new):
+            if isinstance(old, Dummy):
+                return S.One
+
+    source = Subs(f(x, y), (x, y), (z, 1))
+    replacement = Replacement(x)
+    assert source.subs(z, replacement).doit() == f(replacement, 1)
+
+
+def test_Subs_multiple_symbols_preserve_lambda_subclass():
+    class Definition(Lambda):
+        def __call__(self, *args):
+            if any(arg.is_Dummy for arg in args):
+                return S.One
+            return super().__call__(*args)
+
+    source = Subs(f(x, y), (x, y), (0, 1))
+    definition = Definition((z, t), x*z)
+    assert source.subs(f, definition).doit() == 0
+
+
+def test_Subs_multiple_symbols_preserve_binding_domain():
+    point = Symbol('A', commutative=False)
+    source = Subs(f(x, y) + z, (x, y), (point, 1))
+    assert source.subs(z, x).doit() == f(point, 1) + point
+
+
+def test_Subs_multiple_symbols_preserve_dependent_domain():
+    a, b = symbols('A B', commutative=False)
+    source = Subs(x*z, (x, y), (y, b))
+    assert source.subs(z, a*x).doit() == b**2*a
+
+
+def test_Subs_multiple_symbol_scope_context():
+    source = Subs(f(x, y) + z, (x, y), (y, 1))
+    for context in (evaluate(False), distribute(False), _exp_is_pow(True)):
+        clear_cache()
+        with context:
+            result = source.subs(z, x + y)
+        assert result.doit() == f(1, 1) + x + y
+
+
+def test_Subs_capture_avoidance_preserves_assumptions():
+    positive = Symbol('p', positive=True)
+    source = Subs(sign(positive, evaluate=False)*f(positive), positive, y)
+    assert source.subs(f, Lambda(t, positive*t)).doit() == positive*y
+    source = Subs(positive + y, positive, 0)
+    assert source.subs(y, positive, simultaneous=True).doit() == positive
+
+
+def test_Subs_absent_replacement_preserves_binding():
+    for variable in (x, Symbol('p', positive=True)):
+        source = Subs(f(variable), variable, 0)
+        assert source.subs(y, variable).args == source.args
+
+
+def test_Subs_inactive_derivative_target_identity():
+    first = Subs(Derivative(y, x, evaluate=False), x, 1)
+    second = Subs(Derivative(y, z, evaluate=False), z, 1)
+    assert first != second
+    assert first.subs(y, x**2).doit() == 2
+    assert second.subs(y, x**2).doit() == 0
+
+
+def test_Subs_bound_derivative_pattern():
+    pattern = Derivative(y, x, evaluate=False)
+    for variable in (x, z):
+        source = Subs(variable + Derivative(y, variable, evaluate=False), variable, 1)
+        clear_cache()
+        assert source.subs(pattern, 2).doit() == 1
+
+
+def test_Subs_replacement_nested_binding():
+    replacement = Lambda(x, x**2)
+    for variable in (x, z):
+        source = Subs(f(variable) + y, variable, 0)
+        clear_cache()
+        assert source.subs(y, replacement).doit() == f(0) + replacement
+
+
+@pytest.mark.parametrize('hook', ['_eval_subs', '_subs'])
+def test_Subs_atomic_substitution_hooks(hook):
+    def substitute(self, old, new, **hints):
+        return S.Zero if old == x else self
+
+    atom = type('NamedAtom', (AtomicExpr,), {hook: substitute})()
+    first, second = Subs(Tuple(f(x), atom), x, 1), Subs(Tuple(f(z), atom), z, 1)
+    clear_cache()
+    first_value = first.doit()
+    clear_cache()
+    assert first_value != second.doit()
+    assert first != second
+
+
+@pytest.mark.parametrize('hook', ['_xreplace', 'xreplace'])
+def test_Subs_atomic_replacement_hooks(hook):
+    def replace(self, rule):
+        raise ValueError('opaque atom replacement')
+
+    namespace = {hook: replace}
+    if hook == 'xreplace':
+        namespace['free_symbols'] = property(lambda self: {x})
+    atom = type('OpaqueAtom', (AtomicExpr,), namespace)()
+    expr = Tuple(f(x), atom) if hook == '_xreplace' else atom
+    source = Subs(expr, x, 1)
+    rebuilt = source.func(*source.args)
+    assert source == rebuilt
+    assert hash(source) == hash(rebuilt)
+    with raises(ValueError):
+        expr.xreplace({x: z})
+
+
+@pytest.mark.parametrize('atom', [
+    S.One, S.Half, Float(1.5), S.Infinity, S.NegativeInfinity,
+    S.ComplexInfinity, S.NaN, pi, I, y, Dummy('other'),
+])
+def test_Subs_standard_atomic_behavior(atom):
+    first, second = Subs(Tuple(f(x), atom), x, 0), Subs(Tuple(f(z), atom), z, 0)
+    assert first == second
+    assert hash(first) == hash(second)
+
+
+def test_Subs_atomic_power_hook_identity():
+    class NamedPower(AtomicExpr):
+        def _eval_power(self, exponent):
+            if exponent == x:
+                return S.Zero
+
+    atom = NamedPower()
+    first = Subs(Pow(atom, x, evaluate=False), x, 1)
+    second = Subs(Pow(atom, z, evaluate=False), z, 1)
+    assert first.doit() == 0
+    assert second.doit() == atom
+    assert first != second
+    assert (first - second).doit() == -atom
+
+
+def test_Subs_hidden_atomic_descriptor():
+    class PowerRule(metaclass=_HiddenDescriptorMeta):
+        def __get__(self, instance, owner):
+            return lambda exponent: S.Zero if exponent == x else None
+
+    class NamedPower(AtomicExpr):
+        _eval_power = PowerRule()
+
+    atom = NamedPower()
+    first = Subs(Pow(atom, x, evaluate=False), x, 1)
+    second = Subs(Pow(atom, z, evaluate=False), z, 1)
+    assert first.doit() == 0
+    assert second.doit() == atom
+    assert first != second
+    assert (first - second).doit() == -atom
+
+
+def test_Subs_hidden_function_descriptor():
+    class Evaluator:
+        def __getattribute__(self, name):
+            if name == '__get__':
+                raise AttributeError(name)
+            return super().__getattribute__(name)
+
+        def __get__(self, instance, owner):
+            return lambda **hints: S.Zero if instance.args == (x,) else S.One
+
+    class Named(Function):
+        doit = Evaluator()
+
+    first, second = Subs(Named(x), x, 1), Subs(Named(z), z, 1)
+    assert first.doit() == 0
+    assert second.doit() == 1
+    assert first != second
+    assert (first - second).doit() == -1
+
+
+def test_Subs_multiple_symbols_preserve_atom_operators():
+    class NamedPower(AtomicExpr):
+        def _eval_power(self, exponent):
+            if exponent.is_Dummy:
+                return S.Zero
+
+    atom = NamedPower()
+    source = Subs(atom**x + y + z, (x, y), (2, 1))
+    assert source.subs(z, x).doit() == atom**2 + 3
+
+
+@pytest.mark.parametrize('kind', ['atom', 'function', 'metaclass'])
+@pytest.mark.thread_unsafe(reason='changes constructor postprocessors')
+def test_Subs_constructor_postprocessor_identity(kind):
+    def process(expr):
+        return S.Zero if expr.exp == x else expr
+
+    mapping = {'Pow': [process]}
+    if kind == 'atom':
+        class Postprocessed(AtomicExpr):
+            _constructor_postprocessor_mapping = mapping
+        value = Postprocessed()
+    elif kind == 'function':
+        class Postprocessed(Function):
+            _constructor_postprocessor_mapping = mapping
+        value = Postprocessed(y)
+    else:
+        class Meta(type):
+            @property
+            def _constructor_postprocessor_mapping(cls):
+                return mapping
+
+        class Postprocessed(AtomicExpr, metaclass=Meta):
+            pass
+        value = Postprocessed()
+
+    cls = type(value)
+    Basic._constructor_postprocessor_mapping[cls] = mapping
+    clear_cache()
+    try:
+        first_expr = Expr.__new__(Pow, value, x)
+        second_expr = Expr.__new__(Pow, value, z)
+        first_expr.is_commutative = second_expr.is_commutative = value.is_commutative
+        first, second = Subs(first_expr, x, 1), Subs(second_expr, z, 1)
+        assert first.doit() == 0
+        assert second.doit() == value
+        assert first != second
+    finally:
+        del Basic._constructor_postprocessor_mapping[cls]
+        clear_cache()
+
+
+def test_Subs_scope_mask_preserves_held_expression():
+    class EvaluatingFunction(Function):
+        @classmethod
+        def eval(cls, arg):
+            if isinstance(arg, Dummy):
+                return S.One
+
+    source = Subs(EvaluatingFunction(x), x, 0)
+    assert source.subs(y, x).args == source.args
+
+
+def test_Subs_renaming_assumptions():
+    positive = Symbol('p', positive=True)
+    for old, new in [(x, positive), (positive, x)]:
+        source = Subs(sign(old, evaluate=False), old, 0)
+        assert source.subs(old, new).doit() == source.doit()
+
+
+def test_Subs_renaming_symbol_subclass():
+    class EvaluatingSymbol(Symbol):
+        def doit(self, **hints):
+            return S.One
+
+    source = Subs(f(x), x, 0)
+    assert source.subs(x, EvaluatingSymbol('replacement')).doit() == f(0)
+
+
+@pytest.mark.parametrize('kind', ['eval', 'doit', 'subclass'])
+@pytest.mark.parametrize('replacement', [z, Symbol('long'), Dummy('renamed')])
+def test_Subs_renaming_preserves_evaluator(kind, replacement):
+    class NamedFunction(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == x:
+                return S.Zero
+
+    class NamedExpr(Expr):
+        def doit(self, **hints):
+            return S.Zero if self.args == (x,) else self
+
+    if kind == 'subclass':
+        source = _NameSensitiveSubs(f(x), x, 1)
+    else:
+        expr = NamedFunction(x, evaluate=False) if kind == 'eval' else NamedExpr(x)
+        source = Subs(expr, x, 1)
+    assert source.subs(x, replacement).doit() == source.doit()
+
+
+@pytest.mark.parametrize('point', [
+    Integral(g(y), (x, 0, 1)), Sum(g(y), (x, 0, 1)), Product(g(y), (x, 1, 2)),
+])
+@pytest.mark.parametrize('clear_between', [False, True])
+def test_Subs_renaming_preserves_point_scope(point, clear_between):
+    first, second = Subs(f(x), x, point), Subs(f(z), z, point)
+    assert first == second
+    for sources in ((first, second), (second, first)):
+        clear_cache()
+        results = []
+        for source in sources:
+            if clear_between:
+                clear_cache()
+            result = source.subs(x, t)
+            assert result.point == (point,)
+            assert result.subs(point, 2).doit() == f(2)
+            results.append(result)
+        assert results[0] == results[1]
+
+
+@pytest.mark.parametrize('expr', [Integral(x, (x, 0, 1)), Pow(x, 0, evaluate=False)])
+def test_Subs_self_mapping_evaluates_expression(expr):
+    source = Subs(expr, y, y)
+    assert source.doit() == expr.doit()
+    assert source.doit(deep=False) == expr
+
+
+@pytest.mark.parametrize('source, variable, expected', [
+    (Subs(f(x), (x, y), (y, y**2)), y,
+     2*y*Subs(Derivative(f(x), x), x, y**2)),
+    (Subs(exp(x + y), (x, y), (y, y**2)), y, 4*y*exp(2*y**2)),
+    (Subs(Subs(f(x), x, y), x, y**2), y, Derivative(f(y), y)),
+    (Subs(f(x), f, sin), x, cos(x)),
+    (Subs(f(x**2), x**2, 0), x, S.Zero),
+    (Subs(f(g(x)), g(x), x**2), x,
+     2*x*Subs(Derivative(f(y), y), y, x**2)),
+    (Subs(z*sqrt(x), x, 0), z, S.Zero),
+])
+def test_Subs_derivative_evaluation(source, variable, expected):
+    assert source.diff(variable) == expected
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, Tuple, g])
+def test_Subs_subclass_identity(wrap):
+    variable = Symbol('long')
+    first = _NameSensitiveSubs(f(x), x, 1)
+    second = _NameSensitiveSubs(f(variable), variable, 1)
+    assert first.doit() == 1
+    assert second.doit() == 4
+    clear_cache()
+    assert wrap(first) != wrap(second)
+    assert len({first, second}) == 2
+    assert (first + second).doit() == 5
+
+
+@pytest.mark.parametrize('deep', [False, True])
+def test_Subs_inner_subclass(deep):
+    inner = _NameSensitiveSubs(f(x), x, 1)
+    source = Subs(inner, y, 2)
+    assert source.expr is inner
+    assert source.variables == (y,)
+    assert source.doit(deep=deep) == 1
+
+
+def test_Subs_subclass_property_views():
+    class TupleViews(Subs):
+        @property
+        def variables(self):
+            return tuple(super().variables)
+
+        @property
+        def point(self):
+            return tuple(super().point)
+
+    first = TupleViews(f(x), x, 1)
+    second = first.func(*first.args)
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first.doit() == f(1)
+
+
+@pytest.mark.parametrize('constructor', [Subs, _NameSensitiveSubs])
+def test_Subs_outer_subclass(constructor):
+    variable = Symbol('long')
+    inner = constructor(f(x), x, 1)
+    source = _NameSensitiveSubs(inner, variable, 2)
+    assert source.expr is inner
+    assert source.variables == (variable,)
+    assert source.doit() == 4
+
+
+@pytest.mark.parametrize('deep', [False, True])
+@pytest.mark.parametrize('variable, expected', [(x, 1), (Symbol('long'), 4)])
+@pytest.mark.parametrize('point', [S.One, Symbol('renamed')])
+def test_Subs_evaluation_returns_subclass(deep, variable, expected, point):
+    class Deferred(Expr):
+        def doit(self, **hints):
+            return _NameSensitiveSubs(self, self.args[0], 1)
+
+    source = Subs(Deferred(variable), variable, point)
+    result = source.doit(deep=deep)
+    if deep:
+        assert result == expected
+    else:
+        assert type(result) is _NameSensitiveSubs
+        assert result.expr == source.expr
+
+
+def test_Subs_opaque_derivative():
+    class HeldSubs(Subs):
+        def doit(self, **hints):
+            return self
+
+    source = HeldSubs(f(x), f, sin)
+    assert source.diff(x) == Derivative(source, x, evaluate=False)
+    assert HeldSubs(z*sqrt(x), x, 0).diff(z) == 0
+
+
+def test_Subs_derivative_creates_target():
+    assert Subs(Derivative(x**3, x), x**2, 1).doit() == 3
+
+
+def test_Subs_deferred_derivative_dependencies():
+    assert Subs(Derivative(y, x), (y, z), (z, x)).doit() == 1
+    assert Subs(Derivative(y**2, x), (y, z), (z, x)).doit() == 2*x
+    assert Subs(Derivative(y, x), (z, y), (x, z)).doit() == 0
+
+
+@pytest.mark.parametrize('body', [y, f(y)])
+@pytest.mark.parametrize('order', [0, 1, 2])
+def test_Subs_symbolic_derivative_order(body, order):
+    n = Symbol('n')
+    source = Subs(Derivative(body, (x, n)), n, order)
+    assert source.doit() == (body if order == 0 else 0)
+
+
+@pytest.mark.parametrize('order', [0, 1])
+def test_Subs_ordered_derivative_counts(order):
+    n, m = symbols('n m')
+    derivative = Derivative(f(y), (x, n))
+    first = Subs(derivative, (n, m), (m, order))
+    second = Subs(derivative, (m, n), (order, m))
+    assert first.doit() == (f(y) if order == 0 else 0)
+    assert second.doit() == Derivative(f(y), (x, m))
+
+
+@pytest.mark.parametrize('count, point', [(1 + t, -1), (2*t, 0)])
+def test_Subs_derivative_count_expression(count, point):
+    assert Subs(Derivative(f(y), (x, count)), t, point).doit() == f(y)
+
+
+@pytest.mark.parametrize('points, expected', [
+    ((0, 0), f(y)), ((0, 1), Derivative(f(y), y)), ((1, 0), S.Zero),
+])
+def test_Subs_multiple_derivative_counts(points, expected):
+    n, m = symbols('n m')
+    source = Subs(Derivative(f(y), (x, n), (y, m)), (n, m), points)
+    assert source.doit() == expected
+
+
+@pytest.mark.parametrize('body', [f(x), f(y)])
+@pytest.mark.parametrize('ordered', [False, True])
+def test_Subs_self_referential_derivative_count(body, ordered):
+    n, m = symbols('n m')
+    variables, points = ((n, m), (m, n + 1)) if ordered else ((n,), (n + 1,))
+    source = Subs(Derivative(body, (x, n)), variables, points)
+    assert source.doit() == Derivative(body, (x, n + 1)).doit()
+
+
+def test_Subs_fixed_derivative_count():
+    assert Subs(Derivative(f(y), x), 1, 0).doit() == 0
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, g])
+def test_Subs_derivative_count_cache(wrap):
+    n, m = symbols('n m')
+    first, second = [Subs(Derivative(f(y), (x, count)), count, 0) for count in (n, m)]
+    assert first == second
+    for sources in ((first, second), (second, first)):
+        clear_cache()
+        for source in sources:
+            result = wrap(source).doit()
+            assert result == wrap(f(y))
+            assert result.free_symbols == {y}
+
+
+@pytest.mark.parametrize('derivative, distinct_values', [
+    (Derivative(f(y), (x, x)), True), (Derivative(f(y), (f(x), x)), False),
+])
+@pytest.mark.parametrize('point', [t, Symbol('k', integer=True, nonnegative=True)])
+@pytest.mark.parametrize('wrap', [lambda value: value, g])
+def test_Subs_symbolic_order_variable_identity(derivative, distinct_values, point, wrap):
+    first = Subs(derivative, x, point)
+    second = Subs(derivative.xreplace({x: z}), z, point)
+    assert (first.doit() != second.doit()) == distinct_values
+    for sources in ((first, second), (second, first)):
+        clear_cache()
+        assert wrap(sources[0]) != wrap(sources[1])
+
+
+def test_Subs_derivative_class_variable_key():
+    first, second = [Subs(Derivative(f(y), (Symbol, count)), count, 1)
+                     for count in (x, z)]
+    assert first._comparison_key[0] and second._comparison_key[0]
+    assert first == second
+    assert hash(first) == hash(second)
+
+
+def test_Subs_invalid_derivative_count():
+    n = Symbol('n')
+    with raises(ValueError):
+        Subs(Derivative(f(y), (x, n)), n, -1).doit()
+
+
+@pytest.mark.parametrize('deep', [False, True])
+def test_Subs_zero_derivative_count_deep(deep):
+    n = Symbol('n')
+    source = Subs(Derivative(Integral(y, z), (x, n)), n, 0)
+    assert source.doit(deep=deep) == (y*z if deep else Integral(y, z))
+
+
+@pytest.mark.parametrize('operation, expected', [
+    (lambda source: source.diff(y), S.One),
+    (lambda source: source.as_leading_term(y), y),
+    (lambda source: source.series(y), y),
+])
+def test_Subs_derivative_count_operations(operation, expected):
+    n = Symbol('n')
+    source = Subs(Derivative(y, (x, n)), n, 0)
+    assert operation(source) == expected
+
+
+def test_Subs_unused_targets_addition():
+    assert (Subs(1, x, 1) + Subs(1, x, 2)).doit() == 2
+    assert (Subs(1, x, 1) + Subs(1, y, 2)).doit() == 2
+
+
+@pytest.mark.parametrize('source, variable, expected', [
+    (Subs(y, y, x), x, x),
+    (Subs(sin(y), y, x), x, x),
+    (Subs(y, y, x**2), x, x**2),
+    (Subs(y, y, 2*x), x, 2*x),
+    (Subs(y**2, y, x + y), y, x**2),
+    (Subs(1/y, y, 1/x), x, x),
+    (Subs((y - 1)**2 + 3*(y - 1)**3, y, 1 + x**2), x, x**4),
+    (Subs(x + y, (x, y), (y, z)), z, 2*z),
+    (Subs(x*y, (x, y), (y, z)), z, z**2),
+    (Subs(y - x, (x, y), (y, z)), z, S.Zero),
+    (Subs(f(y), y, x), x, f(x)),
+    (Subs(Integral(y, z), y, z), z, z**2),
+])
+def test_Subs_leading_term(source, variable, expected):
+    assert source.as_leading_term(variable) == expected
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, f])
+def test_Subs_leading_term_cache(wrap):
+    first, second = [Subs(wrap(variable), variable, x) for variable in (y, z)]
+    assert first == second
+    for sources in ((first, second), (second, first)):
+        clear_cache()
+        for source in sources:
+            result = source.as_leading_term(x)
+            assert result == wrap(x)
+            assert result.free_symbols == {x}
+
+
+def test_Subs_leading_term_evaluator_order():
+    class Named(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == y:
+                return S.Zero
+
+    source = Subs(Named(y, evaluate=False), y, x)
+    assert source.as_leading_term(x) == 0
+
+
+def test_Subs_unresolved_leading_term():
+    source = Subs(Derivative(f(y), y), y, x**2)
+    assert source.as_leading_term(x) == source
+
+    class Held(Subs):
+        def doit(self, **hints):
+            return self
+
+    source = Held(y, y, x)
+    result = source.as_leading_term(x)
+    assert type(result) is Held
+    assert result == source
+    assert result.free_symbols == {x}
+
+
+def test_Subs_leading_term_pole():
+    with raises(PoleError):
+        Subs(exp(y), y, 1/x).as_leading_term(x)
+
+
+@pytest.mark.parametrize('direction', [1, -1])
+def test_Subs_leading_term_context(direction):
+    logarithm = Symbol('L')
+    source = Subs(log(y), y, -x)
+    assert source.as_leading_term(x, logx=logarithm, cdir=direction) == logarithm + direction*I*pi
+
+
+@pytest.mark.parametrize('method', ['series', 'nseries'])
+@pytest.mark.parametrize('source, variable, expected', [
+    (Subs(exp(y)/x**3, (x, y), (y, z)), z,
+        z**-3 + z**-2 + 1/(2*z) + S.One/6 + z/24 + z**2/120 + z**3/720 + O(z**4)),
+    (Subs(exp(y)/x, (x, y), (y, z)), z,
+        1/z + 1 + z/2 + z**2/6 + z**3/24 + O(z**4)),
+    (Subs(exp(y), y, x + 1), x,
+        E + E*x + E*x**2/2 + E*x**3/6 + O(x**4)),
+    (Subs(exp(y), y, x**2), x, 1 + x**2 + O(x**4)),
+    (Subs(y**2, y, x + y), y, x**2 + 2*x*y + y**2),
+    (Subs(y - x, (x, y), (y, z)), z, S.Zero),
+    (Subs(Integral(y, z), y, z), z, z**2),
+])
+def test_Subs_series(source, variable, expected, method):
+    assert getattr(source, method)(variable, n=4) == expected
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, f])
+def test_Subs_series_cache(wrap):
+    first, second = [Subs(wrap(variable), variable, x) for variable in (y, z)]
+    assert first == second
+    expected = wrap(x).series(x, n=4)
+    for sources in ((first, second), (second, first)):
+        clear_cache()
+        for source in sources:
+            result = source.series(x, n=4)
+            assert result == expected
+            assert result.free_symbols == {x}
+
+
+@pytest.mark.parametrize('direction', [1, -1])
+def test_Subs_nseries_context(direction):
+    logarithm = Symbol('L')
+    source = Subs(log(y), y, -x)
+    assert source.nseries(x, logx=logarithm, cdir=direction) == logarithm + direction*I*pi
+
+
+def test_Subs_series_evaluator_order():
+    class Named(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == y:
+                return S.Zero
+
+    source = Subs(Named(y, evaluate=False), y, x)
+    assert source.series(x) == 0
+
+
+def test_Subs_series_unresolved():
+    source = Subs(Derivative(f(y), y), y, x)
+    expected = (Subs(Derivative(f(y), y), y, 0)
+        + x*Subs(Derivative(f(y), (y, 2)), y, 0)
+        + x**2*Subs(Derivative(f(y), (y, 3)), y, 0)/2 + O(x**3))
+    assert source.series(x, n=3).doit() == expected
+
+
+def test_Subs_evaluation_introduces_target():
+    class F(Function):
+        @classmethod
+        def eval(cls, arg):
+            return x
+
+    first = Subs(F(x, evaluate=False), x, 0)
+    second = Subs(F(y, evaluate=False), y, 0)
+    assert first != second
+    assert g(first).doit() == g(0)
+    assert g(second).doit() == g(x)
+
+
+def test_Subs_held_expression_identity():
+    quotient = Mul(x, Pow(x, -1, evaluate=False), evaluate=False)
+    power = Pow(x, 0, evaluate=False)
+    first = Subs(f(x) + quotient, x, 0)
+    second = Subs(f(x) + power, x, 0)
+    assert first != second
+    assert first.doit() == second.doit() == f(0) + 1
+    assert first.doit(deep=False) is S.NaN
+    assert second.doit(deep=False) == f(0) + 1
+
+
+@pytest.mark.parametrize('variable, point, label', [
+    (x, 2, Symbol('_2')),
+    (Symbol('_1'), 1, Symbol('_0')),
+])
+def test_Subs_normalization_evaluates_function(variable, point, label):
+    class F(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == label:
+                return S.Zero
+
+    first = Subs(f(variable) + F(variable), variable, point)
+    second = Subs(f(variable), variable, point)
+    assert first != second
+    assert first.doit() == f(point) + F(point)
+    assert second.doit() == f(point)
+    assert (first - second).doit() == F(point)
+
+
+def test_Subs_normalization_preserves_held_function():
+    class F(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == x:
+                raise ValueError('held argument')
+
+    source = Subs(F(x, evaluate=False), x, 2)
+    assert source == source.func(*source.args)
+    assert hash(source) == hash(source.func(*source.args))
+
+
+@pytest.mark.parametrize('metadata', [False, True])
+@pytest.mark.parametrize('method', ['eval', 'doit'])
+def test_Subs_held_symbol_sensitive_function_identity(metadata, method):
+    if method == 'eval':
+        def evaluate(cls, arg):
+            if arg == x:
+                return S.Zero
+        handler = classmethod(evaluate)
+    else:
+        def doit(self, **hints):
+            if self.args == (x,):
+                return S.Zero
+            return Basic.doit(self, **hints)
+        handler = doit
+
+    namespace = {method: handler}
+    F = Function('F', **namespace) if metadata else type('F', (Function,), namespace)
+
+    first = Subs(F(x, evaluate=False), x, 1)
+    second = Subs(F(z), z, 1)
+    assert first.doit() == 0
+    assert second.doit() == F(1)
+    assert first != second
+    assert (first - second).doit() == -F(1)
+
+
+def test_Subs_identity_does_not_evaluate_labels():
+    class F(Function):
+        @classmethod
+        def eval(cls, arg):
+            if isinstance(arg, Symbol) and arg.name.startswith('_'):
+                raise ValueError('internal label')
+
+    source = Subs(F(x), x, 2)
+    assert source == source.func(*source.args)
+    assert hash(source) == hash(source.func(*source.args))
+    assert source.doit() == F(2)
+
+
+@pytest.mark.parametrize('method', ['constructor', 'doit'])
+def test_Subs_symbol_sensitive_expression_identity(method):
+    if method == 'constructor':
+        class E(Expr):
+            def __new__(cls, arg, evaluate=True):
+                if evaluate and arg == x:
+                    return S.Zero
+                return Expr.__new__(cls, arg)
+    else:
+        class E(Expr):
+            def doit(self, **hints):
+                if self.args == (x,):
+                    return S.Zero
+                return self
+
+    first = Subs(E(x, evaluate=False) if method == 'constructor' else E(x), x, 1)
+    second = Subs(E(z), z, 1)
+    assert first != second
+    assert first.doit() == 0
+    assert second.doit() == E(S.One)
+
+
+def test_Subs_evaluating_atom_identity():
+    class E(AtomicExpr):
+        def doit(self, **hints):
+            return x
+
+    first = Subs(f(x) + E(), x, 0)
+    second = Subs(f(z) + E(), z, 0)
+    assert first != second
+    assert first.doit() == f(0)
+    assert second.doit() == f(0) + x
+
+
+@pytest.mark.parametrize('definition', ['class', 'lambda'])
+def test_Subs_symbol_sensitive_function_definition(definition):
+    class F(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg == x:
+                return S.Zero
+
+    replacement = F if definition == 'class' else Lambda(t, F(t))
+    for variable in (x, z):
+        source = Subs(f(variable), variable, 1)
+        assert source.subs(f, replacement).doit() == F(1)
+
+
+@pytest.mark.parametrize('variable', [Symbol('_0'), Symbol('_1'), Symbol('_2')])
+@pytest.mark.parametrize('point', [0, 1, Symbol('_0'), x])
+def test_Subs_reserved_binding_names(variable, point):
+    first = Subs(f(variable), variable, point)
+    second = Subs(f(z), z, point)
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first.doit() == second.doit() == f(point)
+    for source in (first, second):
+        assert source.subs(f, Lambda(t, x*t)).doit() == x*point
+
+
+def test_Subs_normalization_operand_order():
+    first = Subs(x + y, x, 0)
+    second = Subs(y + z, z, 0)
+    assert first == second
+    assert hash(first) == hash(second)
+
+
+@pytest.mark.parametrize('settings', [
+    ({'order': 'lex'}, {'order': 'rev-lex'}),
+    ({'full_prec': True}, {'full_prec': False}),
+])
+@pytest.mark.thread_unsafe(reason='changes global printer settings')
+def test_Subs_identity_printer_settings(settings):
+    point = y + z + Float('1.23', 50)
+    saved = Printer._global_settings.copy()
+    requests = []
+    try:
+        for options in settings:
+            Printer.set_global_settings(**options)
+            requests.append(Subs(f(x), x, point))
+    finally:
+        Printer._global_settings.clear()
+        Printer._global_settings.update(saved)
+    first, second = requests
+    assert first.args == second.args
+    assert first == second
+    assert hash(first) == hash(second)
+
+
+@pytest.mark.parametrize('variables, points', [(x, 1), ((x, y), (1, 1))])
+def test_Subs_comparison_context(variables, points):
+    source = f(x) + f(y) + exp(x)
+    for context in (evaluate(False), _exp_is_pow(True)):
+        first = Subs(source, variables, points)
+        second = Subs(source, variables, points)
+        with context:
+            first_hash = hash(first)
+        assert first == second
+        assert first_hash == hash(second)
+
+
+@pytest.mark.parametrize('value', [
+    Pow(x, 0, evaluate=False),
+    exp(x, evaluate=False),
+    Mul(2, x + 1, evaluate=False),
+])
+def test_Subs_comparison_context_with_evaluation(value):
+    class HeldConstant(Function):
+        @classmethod
+        def eval(cls, arg):
+            return value
+
+    source = HeldConstant(x, evaluate=False)
+    for context in (evaluate(False), distribute(False), _exp_is_pow(True)):
+        first = Subs(source, x, 0)
+        second = Subs(source, x, 0)
+        with context:
+            first_hash = hash(first)
+            third = Subs(source, x, 0)
+            third_hash = hash(third)
+        assert first.args == second.args == third.args
+        assert first == second == third == first.func(*first.args)
+        assert first_hash == hash(second) == third_hash
+
 
 def test_doitdoit():
     done = Derivative(f(x, g(x)), x, g(x)).doit()

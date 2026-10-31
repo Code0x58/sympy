@@ -2277,7 +2277,7 @@ def test_U9():
     # function.
     # D operator should be added to SymPy
     # See https://github.com/sympy/sympy/issues/4719.
-    assert s3 == (x + y)*Subs(Derivative(g(x), x), x, x**2 + y**2)*2
+    assert s3 == (x + y)*Subs(Derivative(g(z), z), z, x**2 + y**2)*2
 
 
 def test_U10():

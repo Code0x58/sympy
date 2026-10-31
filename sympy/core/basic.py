@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Iterable
+from decimal import Decimal
+from fractions import Fraction
 from itertools import zip_longest
 from functools import cmp_to_key
 from typing import TYPE_CHECKING, overload
@@ -10,13 +12,13 @@ from typing import TYPE_CHECKING, overload
 from .assumptions import _prepare_class_assumptions
 from .cache import cacheit
 from .sympify import _sympify, sympify, SympifyError, _external_converter
-from .sorting import ordered
+from .sorting import default_sort_key, ordered
 from .kind import Kind, UndefinedKind
 from ._print_helpers import Printable
 
 from sympy.utilities.decorator import deprecated
 from sympy.utilities.exceptions import sympy_deprecation_warning
-from sympy.utilities.iterables import iterable, numbered_symbols
+from sympy.utilities.iterables import iterable, numbered_symbols, NotIterable
 from sympy.utilities.misc import filldedent, func_name
 
 
@@ -35,6 +37,103 @@ if TYPE_CHECKING:
     class _SupportsItems(Protocol[_K_co, _V_co]):
         def items(self) -> Iterable[tuple[_K_co, _V_co]]:
             ...
+
+
+def _is_standard_number(value):
+    """Recognize native numeric types with unmodified value semantics."""
+    cls = type(value)
+    return (cls is bool or cls is int or cls is float or cls is complex
+            or cls is Decimal or cls is Fraction)
+
+
+def _get_type_attribute(value, name, default=None):
+    """Look up a type attribute without invoking metaclass lookup hooks."""
+    missing = object()
+    for cls in type.__dict__['__mro__'].__get__(type(value)):
+        namespace = type.__dict__['__dict__'].__get__(cls)
+        attribute = namespace.get(name, missing)
+        if attribute is not missing:
+            return attribute
+    return default
+
+
+def _has_builtin_equality(value, cls):
+    """Recognize containers that inherit the built-in equality operation."""
+    return isinstance(value, cls) and (type(value) is cls
+        or _get_type_attribute(value, '__eq__') is cls.__eq__)
+
+
+def _frozenset_args(value):
+    """Apply Basic's argument identity to a frozenset's stored entries."""
+    return frozenset(map(Basic, frozenset.__iter__(value)))
+
+
+def _compare_tuple_args(left, right):
+    """Compare stored tuple entries with Basic's argument identity."""
+    for a, b in zip(tuple.__iter__(left), tuple.__iter__(right)):
+        if a is b:
+            continue
+        if type(a) is int and type(b) is int:
+            c = (a > b) - (a < b)
+        elif isinstance(a, Basic):
+            c = a.compare(b)
+        elif isinstance(b, Basic):
+            c = -b.compare(a)
+        else:
+            c = Basic(a).compare(Basic(b))
+        if c:
+            return c
+    return (tuple.__len__(left) > tuple.__len__(right)) - (tuple.__len__(left) < tuple.__len__(right))
+
+
+def _args_equal(left, right):
+    """Compare argument sequences using Basic's scalar and container identity."""
+    if len(left) != len(right):
+        return False
+    for a, b in zip(left, right):
+        if a is b:
+            continue
+        if isinstance(a, Basic):
+            if not isinstance(b, Basic) or ((a.is_Number or b.is_Number)
+                    and type(a) != type(b)):
+                return False
+        elif isinstance(b, Basic) or isinstance(a, type) != isinstance(b, type):
+            return False
+        elif type(a) is tuple and type(b) is tuple:
+            if not _args_equal(a, b):
+                return False
+            continue
+        elif isinstance(a, (tuple, frozenset)) or isinstance(b, (tuple, frozenset)):
+            for container in (tuple, frozenset):
+                a_builtin = _has_builtin_equality(a, container)
+                b_builtin = _has_builtin_equality(b, container)
+                if a_builtin != b_builtin:
+                    return False
+                if a_builtin:
+                    if container is tuple:
+                        if not _args_equal(tuple(tuple.__iter__(a)), tuple(tuple.__iter__(b))):
+                            return False
+                    elif _frozenset_args(a) != _frozenset_args(b):
+                        return False
+                    break
+            else:
+                if not a == b:
+                    return False
+            continue
+        if not a == b:
+            return False
+    return True
+
+
+def _iterable_args(args):
+    """Return an iterable argument sequence, or an empty tuple for a leaf."""
+    return args if iterable(args, exclude=NotIterable) else ()
+
+
+def _free_symbol_names(expr):
+    """Collect the available names of free-symbol objects."""
+    return {name for symbol in expr.free_symbols
+            if (name := getattr(symbol, 'name', None)) is not None}
 
 
 def as_Basic(expr):
@@ -374,6 +473,7 @@ class Basic(Printable):
         Return -1, 0, 1 if the object is less than, equal,
         or greater than other in a canonical sense.
         Non-Basic are always greater than Basic.
+        Native complex fields without NaNs are ordered by real and imaginary parts.
         If both names of the classes being compared appear
         in the `ordering_of_classes` then the ordering will
         depend on the appearance of the names there.
@@ -401,11 +501,18 @@ class Basic(Printable):
         # following lines:
         if self is other:
             return 0
+        if not isinstance(other, Basic):
+            return -1
         n1 = self.__class__
         n2 = other.__class__
         c = _cmp_name(n1, n2)
         if c:
             return c
+        if n1 is not n2 and n1 != n2:
+            lk, rk = default_sort_key(n1), default_sort_key(n2)
+            c = bool(lk > rk) - bool(lk < rk)
+            if c:
+                return c
         #
         st = self._hashable_content()
         ot = other._hashable_content()
@@ -415,14 +522,66 @@ class Basic(Printable):
         if c:
             return c
         for l, r in zip(st, ot):
+            if l is r:
+                continue
             if isinstance(l, Basic):
                 c = l.compare(r)
-            elif isinstance(l, frozenset):
-                l = Basic(*l) if isinstance(l, frozenset) else l
-                r = Basic(*r) if isinstance(r, frozenset) else r
-                c = l.compare(r)
+            elif isinstance(r, Basic):
+                c = -r.compare(l)
+            elif isinstance(l, type) or isinstance(r, type):
+                # Class-valued fields follow other fields consistently.
+                if not isinstance(l, type):
+                    c = -1
+                elif not isinstance(r, type):
+                    c = 1
+                elif l == r:
+                    c = 0
+                else:
+                    lk, rk = default_sort_key(l), default_sort_key(r)
+                    c = bool(lk > rk) - bool(lk < rk)
+            elif type(l) is tuple and type(r) is tuple:
+                c = _compare_tuple_args(l, r)
             else:
-                c = (l > r) - (l < r)
+                l_set_builtin = _has_builtin_equality(l, frozenset)
+                r_set_builtin = _has_builtin_equality(r, frozenset)
+                if not (l_set_builtin or r_set_builtin
+                        or _has_builtin_equality(l, tuple) or _has_builtin_equality(r, tuple)) and l == r:
+                    c = 0
+                elif (isinstance(l, frozenset) or isinstance(r, frozenset)
+                        or isinstance(l, tuple) and isinstance(r, tuple)):
+                    container = (frozenset if isinstance(l, frozenset) or isinstance(r, frozenset)
+                                 else tuple)
+                    l_builtin = (l_set_builtin if container is frozenset
+                                 else _has_builtin_equality(l, container))
+                    r_builtin = (r_set_builtin if container is frozenset
+                                 else _has_builtin_equality(r, container))
+                    if l_builtin != r_builtin:
+                        c = -1 if l_builtin else 1
+                    elif not l_builtin:
+                        # Custom equality can equate containers with other native types.
+                        c = bool(l > r) - bool(l < r)
+                        if not c:
+                            raise TypeError(f"Cannot order {container.__name__} fields with custom equality")
+                    elif container is tuple:
+                        c = _compare_tuple_args(l, r)
+                    else:
+                        # Wrapping entries gives native and class fields the same rules.
+                        l, r = _frozenset_args(l), _frozenset_args(r)
+                        if l == r:
+                            c = 0
+                        else:
+                            l, r = sorted(l, key=_args_sortkey), sorted(r, key=_args_sortkey)
+                            c = Basic(*l).compare(Basic(*r))
+                # NaNs must not acquire an order through their components.
+                elif ((type(l) is complex or type(r) is complex)
+                        and _is_standard_number(l) and _is_standard_number(r)
+                        and l == l and r == r):
+                    l, r = (l.real, l.imag), (r.real, r.imag)
+                    c = (l > r) - (l < r)
+                else:
+                    c = bool(l > r) - bool(l < r)
+                    if not c and _has_builtin_equality(l, tuple) != _has_builtin_equality(r, tuple):
+                        raise TypeError("Cannot order tuple fields with custom equality")
             if c:
                 return c
         return 0
@@ -472,10 +631,17 @@ class Basic(Printable):
 
         # XXX: remove this when issue 5169 is fixed
         def inner_key(arg):
+            # The tag orders SymPy values, native values, then classes.
             if isinstance(arg, Basic):
-                return arg.sort_key(order)
-            else:
-                return arg
+                return 0, arg.sort_key(order)
+            if isinstance(arg, type):
+                return 2, default_sort_key(arg, order=order)
+            if (_is_standard_number(arg) and type(arg) is not complex
+                    or type(arg) is str or arg is None):
+                return 1, arg
+            if type(arg) is tuple and all(type(value) is int for value in arg):
+                return 1, arg
+            return 1, _NativeSortKey(arg)
 
         args = self._sorted_args
         args = len(args), tuple([inner_key(arg) for arg in args])
@@ -531,16 +697,7 @@ class Basic(Printable):
         if  not (self.is_Number and other.is_Number) and (
                 type(self) != type(other)):
             return False
-        a, b = self._hashable_content(), other._hashable_content()
-        if a != b:
-            return False
-        # check number *in* an expression
-        for a, b in zip(a, b):
-            if not isinstance(a, Basic):
-                continue
-            if a.is_Number and type(a) != type(b):
-                return False
-        return True
+        return _args_equal(self._hashable_content(), other._hashable_content())
 
     def __ne__(self, other):
         """``a != b``  -> Compare two symbolic trees and see whether they are different
@@ -728,7 +885,8 @@ class Basic(Printable):
         True
         """
         empty: set[Basic] = set()
-        return empty.union(*(a.free_symbols for a in self.args))
+        return empty.union(*[a.free_symbols for a in self.args
+                             if not isinstance(a, type)])
 
     @property
     def expr_free_symbols(self):
@@ -820,14 +978,15 @@ class Basic(Printable):
         canonical = {}
 
         def assign(x, used):
+            if isinstance(x, type):
+                return
             used = set(used)
 
             for b in getattr(x, 'bound_symbols', ()):
                 if b not in temporary or b in canonical:
                     continue
 
-                names = {s.name for s in x.free_symbols
-                         if isinstance(s, Symbol)}
+                names = _free_symbol_names(x)
                 i = 0
                 while f'_{i}' in used or f'_{i}' in names:
                     i += 1
@@ -835,7 +994,8 @@ class Basic(Printable):
                 canonical[b] = Symbol(f'_{i}')
                 used.add(f'_{i}')
 
-            for arg in x.args:
+            children = x.args if isinstance(x, Basic) else _iterable_args(getattr(x, 'args', ()))
+            for arg in children:
                 assign(arg, used)
 
         assign(rv, set())
@@ -861,18 +1021,13 @@ class Basic(Printable):
             return {}
         dums = numbered_symbols('_')
         reps = {}
-        # watch out for free symbol that are not in bound symbols;
-        # those that are in bound symbols are about to get changed
+        # A symbol can have both bound and free occurrences.
 
-        # XXX: free_symbols only returns particular kinds of expressions that
-        # generally have a .name attribute. There is not a proper class/type
-        # that represents this.
-        names = {i.name for i in self.free_symbols - set(bound)} # type: ignore
+        names = _free_symbol_names(self)
         for b in bound:
             d = next(dums)
-            if b.is_Symbol:
-                while d.name in names:
-                    d = next(dums)
+            while d.name in names:
+                d = next(dums)
             reps[b] = d
         return reps
 
@@ -1314,9 +1469,12 @@ class Basic(Printable):
             hit = False
             args = list(self.args)
             for i, arg in enumerate(args):
-                if not hasattr(arg, '_eval_subs'):
-                    continue
-                arg = arg._subs(old, new, **hints)
+                if isinstance(arg, type):
+                    arg = new if arg == old else arg
+                else:
+                    if not hasattr(arg, '_eval_subs'):
+                        continue
+                    arg = arg._subs(old, new, **hints)
                 if not _aresame(arg, args[i]):
                     hit = True
                     args[i] = arg
@@ -1339,7 +1497,8 @@ class Basic(Printable):
                 return rv
             return self
 
-        if _aresame(self, old):
+        # Equal children can use different bindings; retain the root type check.
+        if self.__class__ == old.__class__ and self == old:
             return new
 
         rv = self._eval_subs(old, new)
@@ -1435,6 +1594,10 @@ class Basic(Printable):
             args = []
             changed = False
             for a in self.args:
+                if isinstance(a, type):
+                    args.append(rule.get(a, a))
+                    changed |= a in rule
+                    continue
                 _xreplace = getattr(a, '_xreplace', None)
                 if _xreplace is not None:
                     a_xr = _xreplace(rule)
@@ -1828,29 +1991,41 @@ class Basic(Printable):
         def walk(rv, F):
             """Apply ``F`` to args and then to result.
             """
-            args = getattr(rv, 'args', None)
-            if args is not None:
+            if isinstance(rv, type):
+                return rv
+            raw_args = getattr(rv, 'args', None)
+            if raw_args is not None:
+                args = raw_args if isinstance(rv, Basic) else tuple(_iterable_args(raw_args))
                 if args:
                     newargs = tuple([walk(a, F) for a in args])
-                    if args != newargs:
+                    if args != newargs or changed and any(
+                            a is not b and not _aresame(a, b)
+                            for a, b in zip(args, newargs)):
                         rv = rv.func(*newargs)
                         if simultaneous:
                             # if rv is something that was already
                             # matched (that was changed) then skip
                             # applying F again
                             for i, e in enumerate(args):
-                                if rv == e and e != newargs[i]:
+                                if (rv == e and e is not newargs[i]
+                                        and not _aresame(e, newargs[i])):
                                     return rv
                 rv = F(rv)
             return rv
 
         mapping = {}  # changes that took place
+        changed = False
 
         def rec_replace(expr):
+            nonlocal changed
             result = _query(expr)
             if result or result == {}:
                 v = _value(expr, result)
-                if v is not None and v != expr:
+                # Equal expressions can retain different bindings.
+                if (v is not None and v is not expr
+                        and (v != expr or isinstance(v, Basic)
+                             and isinstance(expr, Basic) and not _aresame(v, expr))):
+                    changed = True
                     if map:
                         mapping[expr] = v
                     expr = v
@@ -2229,7 +2404,7 @@ class Basic(Printable):
     def _rewrite(self, pattern, rule, method, **hints):
         deep = hints.pop('deep', True)
         if deep:
-            args = [a._rewrite(pattern, rule, method, **hints)
+            args = [a if isinstance(a, type) else a._rewrite(pattern, rule, method, **hints)
                     for a in self.args]
         else:
             args = self.args
@@ -2356,6 +2531,44 @@ class Basic(Printable):
         return True
 
 _aresame = Basic.is_same  # for sake of others importing this
+
+
+class _NativeSortKey:
+    """Order native fields with Basic's comparison, retaining native hashes."""
+    __slots__ = ('_content',)
+
+    def __init__(self, value):
+        self._content = (value,)
+
+    def __eq__(self, other):
+        content = other._content if isinstance(other, _NativeSortKey) else (other,)
+        return _args_equal(self._content, content)
+
+    def __hash__(self):
+        return hash(self._content[0])
+
+    def _compare(self, other):
+        content = other._content if isinstance(other, _NativeSortKey) else (other,)
+        # Exact tuple fields share Basic's tuple ordering.
+        if type(self._content[0]) is tuple and type(content[0]) is tuple:
+            return _compare_tuple_args(self._content[0], content[0])
+        return Basic(*self._content).compare(Basic(*content))
+
+    def __lt__(self, other):
+        return self._compare(other) < 0
+
+    def __gt__(self, other):
+        return self._compare(other) > 0
+
+    def __le__(self, other):
+        return self == other or self < other
+
+    def __ge__(self, other):
+        return self == other or self > other
+
+    def __repr__(self):
+        return f'_NativeSortKey({self._content[0]!r})'
+
 
 # key used by Mul and Add to make canonical args
 _args_sortkey = cmp_to_key(Basic.compare)
