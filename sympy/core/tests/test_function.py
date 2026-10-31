@@ -6,6 +6,7 @@ from fractions import Fraction
 from functools import partial
 from pickle import dumps, loads
 
+from sympy.calculus.accumulationbounds import AccumBounds
 from sympy.concrete.summations import Sum
 from sympy.concrete.products import Product
 from sympy.core.add import Add
@@ -2341,6 +2342,14 @@ def test_Subs_unmatched_symbol_keeps_custom_substitution_hook(replacement, wrap)
 
     source = Subs(wrap(Reacting(x)), x, 0)
     assert source.subs(y, replacement).doit() == wrap(replacement)
+
+
+@pytest.mark.parametrize('simultaneous', [False, True])
+def test_Subs_unmatched_symbol_keeps_interval_power_substitution(simultaneous):
+    variable = Symbol('variable', real=True)
+    expr = Pow(1, AccumBounds(variable, variable + 1), evaluate=False)
+    source = Subs(expr, variable, 0)
+    assert source.subs(y, variable, simultaneous=simultaneous).expr == 1
 
 
 def test_Subs_renaming_assumptions():
