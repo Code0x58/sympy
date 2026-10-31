@@ -2303,6 +2303,46 @@ def test_Subs_scope_mask_preserves_held_expression():
     assert source.subs(y, x).args == source.args
 
 
+@pytest.mark.parametrize('replacement', [x, Dummy('replacement')])
+@pytest.mark.parametrize('simultaneous', [False, True])
+@pytest.mark.parametrize('wrap', [lambda expr: expr, lambda expr: expr + 1])
+def test_Subs_unmatched_symbol_preserves_constructor(wrap, simultaneous, replacement):
+    class RejectDummy(Function):
+        def __new__(cls, *args, **kwargs):
+            if any(isinstance(arg, Dummy) for arg in args):
+                raise ValueError('dummy argument rejected')
+            return super().__new__(cls, *args, **kwargs)
+
+    source = Subs(wrap(RejectDummy(x)), x, 0)
+    assert source.subs(y, replacement, simultaneous=simultaneous).args == source.args
+
+
+@pytest.mark.parametrize('simultaneous', [False, True])
+def test_Subs_point_edit_preserves_constructor(simultaneous):
+    class RejectDummy(Function):
+        def __new__(cls, *args, **kwargs):
+            if any(isinstance(arg, Dummy) for arg in args):
+                raise ValueError('dummy argument rejected')
+            return super().__new__(cls, *args, **kwargs)
+
+    expr = RejectDummy(x)
+    source = Subs(expr, x, y)
+    result = source.subs(y, x, simultaneous=simultaneous)
+    assert result.expr == expr and result.variables == (x,) and result.point == (x,)
+
+
+@pytest.mark.parametrize('replacement', [x, Dummy('replacement')])
+@pytest.mark.parametrize('wrap', [lambda expr: expr, lambda expr: expr + 1])
+def test_Subs_unmatched_symbol_keeps_custom_substitution_hook(replacement, wrap):
+    class Reacting(Expr):
+        def _eval_subs(self, old, new):
+            if old == y:
+                return self.args[0] + new
+
+    source = Subs(wrap(Reacting(x)), x, 0)
+    assert source.subs(y, replacement).doit() == wrap(replacement)
+
+
 def test_Subs_renaming_assumptions():
     positive = Symbol('p', positive=True)
     for old, new in [(x, positive), (positive, x)]:

@@ -2942,6 +2942,43 @@ class Subs(Expr):
                 needs_mask([variable for _, variable in active])
                 or isinstance(old, FunctionClass) and callable(new)
                 and not _is_uninterpreted_function(new) and self._comparison_key[0])):
+            if type(old) in (Symbol, Dummy) and old not in free:
+                from .power import Pow
+
+                def unchanged(arg):
+                    for node in iterargs(arg):
+                        if isinstance(node, type):
+                            if node == old:
+                                return False
+                            continue
+                        if (not isinstance(node, Basic)
+                                or _get_type_attribute(node, '__getattribute__') is not object.__getattribute__
+                                or _get_type_attribute(node, '__class__') is not object.__dict__['__class__']
+                                or inspect.getattr_static(node, '_subs', None) is not Basic._subs):
+                            return False
+                        if node.__class__ == old.__class__ and node == old:
+                            return False
+                        hook = inspect.getattr_static(node, '_eval_subs', None)
+                        if not (any(hook is method for method in (
+                                    Basic._eval_subs, Function._eval_subs, Symbol._eval_subs,
+                                    Add._eval_subs, Mul._eval_subs))
+                                or type(node) is Pow and hook is Pow._eval_subs
+                                or isinstance(node, Number) and _has_standard_atom_hooks(type(node))
+                                and any(hook is method for method in (
+                                    Number._eval_subs, Infinity._eval_subs, NegativeInfinity._eval_subs))):
+                            return False
+                    return True
+
+                # Avoid rebuilding an unchanged expression; custom hooks can
+                # react even to symbols absent from their stored arguments.
+                if unchanged(self.expr):
+                    if len(v) == 1:
+                        points = [subs(point) for point in pt]
+                        if all(a is b for a, b in zip(points, pt)):
+                            return self
+                        return self.func(self.expr, v, points)
+                    if all(unchanged(point) for point in pt):
+                        return self
             if len(v) > 1:
                 def can_rename(variable, *args, point=S.One):
                     # The extra occurrence makes the proof inspect all hooks.
