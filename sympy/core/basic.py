@@ -93,36 +93,32 @@ def _args_equal(left, right):
     for a, b in zip(left, right):
         if a is b:
             continue
-        if (isinstance(a, (Basic, type, tuple, frozenset))
-                or isinstance(b, (Basic, type, tuple, frozenset))):
-            if not isinstance(a, Basic):
-                if isinstance(b, Basic) or isinstance(a, type) != isinstance(b, type):
+        if isinstance(a, Basic):
+            if not isinstance(b, Basic) or a.is_Number and type(a) != type(b):
+                return False
+        elif isinstance(b, Basic) or isinstance(a, type) != isinstance(b, type):
+            return False
+        elif type(a) is tuple and type(b) is tuple:
+            if not _args_equal(a, b):
+                return False
+            continue
+        elif isinstance(a, (tuple, frozenset)) or isinstance(b, (tuple, frozenset)):
+            for container in (tuple, frozenset):
+                a_builtin = _has_builtin_equality(a, container)
+                b_builtin = _has_builtin_equality(b, container)
+                if a_builtin != b_builtin:
                     return False
-                if type(a) is tuple and type(b) is tuple:
-                    if not _args_equal(a, b):
+                if a_builtin:
+                    if container is tuple:
+                        if not _args_equal(tuple(tuple.__iter__(a)), tuple(tuple.__iter__(b))):
+                            return False
+                    elif _frozenset_args(a) != _frozenset_args(b):
                         return False
-                    continue
-                if isinstance(a, (tuple, frozenset)) or isinstance(b, (tuple, frozenset)):
-                    for container in (tuple, frozenset):
-                        a_builtin = _has_builtin_equality(a, container)
-                        b_builtin = _has_builtin_equality(b, container)
-                        if a_builtin != b_builtin:
-                            return False
-                        if a_builtin:
-                            if container is tuple:
-                                if not _args_equal(tuple(tuple.__iter__(a)), tuple(tuple.__iter__(b))):
-                                    return False
-                            elif _frozenset_args(a) != _frozenset_args(b):
-                                return False
-                            break
-                    else:
-                        if not a == b:
-                            return False
-                    continue
-            elif not isinstance(b, Basic):
-                return False
-            elif a.is_Number and type(a) != type(b):
-                return False
+                    break
+            else:
+                if not a == b:
+                    return False
+            continue
         if not a == b:
             return False
     return True
@@ -2544,7 +2540,7 @@ class _NativeSortKey:
         return other.value if isinstance(other, _NativeSortKey) else Basic(other)
 
     def __eq__(self, other):
-        return self.value == self._as_basic(other)
+        return _args_equal(self.value.args, self._as_basic(other).args)
 
     def __hash__(self):
         return hash(self.value.args[0])
