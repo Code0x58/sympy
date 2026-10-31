@@ -2534,26 +2534,30 @@ _aresame = Basic.is_same  # for sake of others importing this
 
 class _NativeSortKey:
     """Order native fields with Basic's comparison, retaining native hashes."""
-    __slots__ = ('value',)
+    __slots__ = ('_content',)
 
     def __init__(self, value):
-        self.value = Basic(value)
-
-    @staticmethod
-    def _as_basic(other):
-        return other.value if isinstance(other, _NativeSortKey) else Basic(other)
+        self._content = (value,)
 
     def __eq__(self, other):
-        return _args_equal(self.value.args, self._as_basic(other).args)
+        content = other._content if isinstance(other, _NativeSortKey) else (other,)
+        return _args_equal(self._content, content)
 
     def __hash__(self):
-        return hash(self.value.args[0])
+        return hash(self._content[0])
+
+    def _compare(self, other):
+        content = other._content if isinstance(other, _NativeSortKey) else (other,)
+        # Exact tuple fields share Basic's tuple ordering.
+        if type(self._content[0]) is tuple and type(content[0]) is tuple:
+            return _compare_tuple_args(self._content[0], content[0])
+        return Basic(*self._content).compare(Basic(*content))
 
     def __lt__(self, other):
-        return self.value.compare(self._as_basic(other)) < 0
+        return self._compare(other) < 0
 
     def __gt__(self, other):
-        return self.value.compare(self._as_basic(other)) > 0
+        return self._compare(other) > 0
 
     def __le__(self, other):
         return self == other or self < other
@@ -2562,7 +2566,7 @@ class _NativeSortKey:
         return self == other or self > other
 
     def __repr__(self):
-        return f'_NativeSortKey({self.value.args[0]!r})'
+        return f'_NativeSortKey({self._content[0]!r})'
 
 
 # key used by Mul and Add to make canonical args
