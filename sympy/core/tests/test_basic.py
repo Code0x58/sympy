@@ -467,6 +467,31 @@ def test_argument_equality_short_circuit():
         assert first != second and second != first
 
 
+def test_number_argument_identity_is_symmetric():
+    class Alias(Basic):
+        def __eq__(self, other):
+            if isinstance(other, Alias):
+                other = other.args[0]
+            return self.args[0] == other
+
+        def __hash__(self):
+            return hash(self.args[0])
+
+    for number in (S.One, Float(1)):
+        for wrap in (lambda value: value, lambda value: (value,),
+                     lambda value: frozenset([value])):
+            first, second = Basic(wrap(Alias(number))), Basic(wrap(number))
+            assert first != second and second != first
+            assert first.compare(second) == -second.compare(first) != 0
+            for left, right in ((first, second), (second, first)):
+                clear_cache()
+                assert default_sort_key(left) != default_sort_key(right)
+                functions = [Function('number_argument_identity', value=value)
+                             for value in (left, right)]
+                assert functions[0] != functions[1]
+                assert functions[1] != functions[0]
+
+
 def test_symbol_equality_compatibility():
     class Name(str):
         __slots__ = ()

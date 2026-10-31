@@ -94,7 +94,8 @@ def _args_equal(left, right):
         if a is b:
             continue
         if isinstance(a, Basic):
-            if not isinstance(b, Basic) or a.is_Number and type(a) != type(b):
+            if not isinstance(b, Basic) or ((a.is_Number or b.is_Number)
+                    and type(a) != type(b)):
                 return False
         elif isinstance(b, Basic) or isinstance(a, type) != isinstance(b, type):
             return False
