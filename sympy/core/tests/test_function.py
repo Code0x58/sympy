@@ -711,6 +711,22 @@ def test_Subs_derivative_reordering_progress():
     assert result.doit() == result
 
 
+@pytest.mark.parametrize('deep', [False, True])
+def test_Subs_evaluator_preserves_returned_order(deep):
+    class Deferred(Expr):
+        def _eval_subs(self, old, new):
+            if old == y and new == 0:
+                return Subs(self, (y, x), (0, y))
+
+    expr = Deferred()
+    source = Subs(expr, (x, y), (y, 0))
+    expected = expr.subs(list(zip(source.variables, source.point)))
+    assert expected.variables == (y, x)
+    result = source.doit(deep=deep)
+    assert result.args == expected.args
+    assert result.doit().args == expected.args
+
+
 @pytest.mark.parametrize('body', [f(x), f(x) + 1])
 @pytest.mark.parametrize('order', [S.One, y])
 @pytest.mark.parametrize('deep', [False, True])

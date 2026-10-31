@@ -2744,13 +2744,14 @@ class Subs(Expr):
             else:
                 # inject remaining subs
                 rv = e.subs(undone)
+
+            # Derivative evaluation can reorder an unchanged deferred request.
+            if (type(self) is Subs and type(rv) is Subs and rv.expr == self.expr
+                    and Counter(zip(rv.variables, rv.point)) == Counter(zip(v, p))):
+                return self
         else:
             rv = e.doit(**hints).subs(replacements)
 
-        # Reordering an otherwise unchanged request is not evaluation progress.
-        if (type(self) is Subs and type(rv) is Subs and rv.expr == self.expr
-                and Counter(zip(rv.variables, rv.point)) == Counter(zip(v, p))):
-            return self
         if hints.get('deep', True) and rv != self:
             rv = rv.doit(**hints)
         return rv
