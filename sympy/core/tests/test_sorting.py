@@ -442,6 +442,24 @@ def test_class_order_survives_representative_collection():
     assert Basic(alias).compare(other) == expected
 
 
+@pytest.mark.parametrize('wrap', [lambda value: value, Basic])
+def test_class_order_survives_interned_representative(wrap):
+    Meta = _class_alias_metaclass()
+    first = Meta('Alpha', (), {'label': 1})
+    alias = Meta('Zulu', (), {'label': 1})
+    other = Basic(Meta('Middle', (), {'label': 2}))
+    reference = ref(first)
+    first_key = default_sort_key(wrap(first))
+    alias_key = default_sort_key(wrap(alias))
+    assert first_key == alias_key
+    expected = Basic(alias).compare(other)
+    del first, first_key, alias_key
+    clear_cache()
+    gc.collect()
+    assert reference() is None
+    assert Basic(alias).compare(other) == expected != 0
+
+
 def test_class_order_reused_identity(monkeypatch):
     Meta = _class_alias_metaclass()
     monkeypatch.setattr(function_module, '_class_order_key', lambda cls: ('class', 0))

@@ -980,12 +980,12 @@ def _class_order_key(cls):
 
 class _ComparisonKey:
     """Give hashable equality classes a stable order while their keys are live."""
-    __slots__ = ('value', 'index', '_hash', '__weakref__')
+    __slots__ = ('value', 'order', '_hash', '__weakref__')
 
     def __init__(self, value):
         self.value = value
         self._hash = hash(value)
-        self.index = -1
+        self.order = None
 
     def __hash__(self):
         return self._hash
@@ -1004,13 +1004,10 @@ class _ComparisonKey:
         other_is_class = isinstance(other.value, type)
         if self_is_class != other_is_class:
             return self_is_class < other_is_class
-        if self_is_class:
-            return (_get_class_order_key(self.value, self._hash)
-                    < _get_class_order_key(other.value, other._hash))
-        return self.index < other.index
+        return self.order < other.order
 
     def __repr__(self):
-        return '_ComparisonKey(%s)' % self.index
+        return f'_ComparisonKey({self.order!r})'
 
     def __reduce__(self):
         return _get_comparison_key, (self.value,)
@@ -1045,8 +1042,12 @@ if hasattr(os, 'register_at_fork'):
 
 def _get_comparison_key(value):
     candidate = _ComparisonKey(value)
+    if isinstance(value, type):
+        # Register the actual alias even when interning returns another class.
+        candidate.order = _get_class_order_key(value, candidate._hash)
     with _comparison_key_lock:
-        candidate.index = next(_comparison_key_indices)
+        if candidate.order is None:
+            candidate.order = next(_comparison_key_indices)
         # Atomic insertion preserves representatives when equality reenters.
         # Retry if a weak representative disappears before dereferencing it.
         while True:
