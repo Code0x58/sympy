@@ -157,12 +157,14 @@ def cacheit_by_identity(func):
     """Cache a method separately for each instance, using cacheit's policies."""
     @cacheit
     @wraps(func)
-    def cached(self, identity, /, *args, **kwargs):
+    def cached(identity, self, /, *args, **kwargs):
         return func(self, *args, **kwargs)
 
     @wraps(cached)
-    def wrapper(self, *args, **kwargs):
-        return cached(self, id(self), *args, **kwargs)
+    def wrapper(*args, **kwargs):
+        if args:
+            return cached(id(args[0]), *args, **kwargs)
+        return func(**kwargs)
 
     wrapper.__wrapped__ = func
     return wrapper

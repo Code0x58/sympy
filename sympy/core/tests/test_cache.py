@@ -46,12 +46,27 @@ def test_cacheit_by_identity():
     assert first.capture.__name__ == 'capture'
     assert first.capture.__doc__ == 'Capture the actual receiver and arguments.'
     assert Equal.capture.__wrapped__(first, 3) == (first, 3, None)
+    assert Equal.capture(self=first, amount=3) == (first, 3, None)
     if USE_CACHE == 'yes':
         assert first.capture() is left
         assert second.capture() is right
         clear_cache()
         assert first.capture.cache_info().currsize == 0
         assert first.capture() is not left
+
+
+def test_cacheit_by_identity_keyword_forwarding():
+    class Receiver:
+        @cacheit_by_identity
+        def capture(receiver, *, self=None, identity=None):
+            return receiver, self, identity
+
+    value = Receiver()
+    result = value.capture(self='self', identity='identity')
+    assert result == (value, 'self', 'identity')
+    assert Receiver.capture(receiver=value, self='self', identity='identity') == result
+    if USE_CACHE == 'yes':
+        assert value.capture(self='self', identity='identity') is result
 
 
 def test_cachit_exception():
