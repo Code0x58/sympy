@@ -971,14 +971,20 @@ class UndefSageHelper:
 _undef_sage_helper = UndefSageHelper()
 
 
+def _class_order_key(cls):
+    """Order distinct class definitions by name and process-local identity."""
+    return type(cls).__name__, str(cls), str(cls.__module__), cls.__qualname__, id(cls)
+
+
 class _ComparisonKey:
     """Give hashable equality classes a stable order while their keys are live."""
-    __slots__ = ('value', 'index', '_hash', '__weakref__')
+    __slots__ = ('value', 'index', '_hash', '_class_key', '__weakref__')
 
     def __init__(self, value):
         self.value = value
         self._hash = hash(value)
         self.index = -1
+        self._class_key = _class_order_key(value) if isinstance(value, type) else None
 
     def __hash__(self):
         return self._hash
@@ -991,6 +997,10 @@ class _ComparisonKey:
     def __lt__(self, other):
         if not isinstance(other, _ComparisonKey):
             return NotImplemented
+        if (self._class_key is None) != (other._class_key is None):
+            return self._class_key is None
+        if self._class_key is not None:
+            return self._class_key < other._class_key
         return self.index < other.index
 
     def __repr__(self):

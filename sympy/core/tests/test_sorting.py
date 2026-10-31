@@ -345,6 +345,98 @@ def test_class_sort_keys():
     assert first_key == default_sort_key(second)
 
 
+@pytest.mark.parametrize('order', [None, 'rev-lex'])
+@pytest.mark.parametrize('wrap', [lambda value: value, Basic,
+    lambda value: Tuple(Basic(value))])
+def test_equal_class_literal_sort_keys(order, wrap):
+    class Meta(type):
+        def __eq__(cls, other):
+            if not isinstance(other, Meta):
+                return NotImplemented
+            return cls.label == other.label
+
+        def __hash__(cls):
+            return 0
+
+    class SubMeta(Meta):
+        pass
+
+    first = Meta('SharedName', (), {'label': 1})
+    second = SubMeta('Alias', (), {'label': 1})
+    other = Meta('SharedName', (), {'label': 2})
+    keys = []
+    for value in (first, second, other):
+        clear_cache()
+        keys.append(default_sort_key(wrap(value), order=order))
+    assert first == second and second == first
+    assert keys[0] == keys[1]
+    assert hash(keys[0]) == hash(keys[1])
+    assert keys[0] != keys[2]
+    assert (keys[0] < keys[2]) == (keys[1] < keys[2])
+    assert (keys[0] > keys[2]) == (keys[1] > keys[2])
+    assert Basic(first).compare(Basic(second)) == 0
+    assert Basic(first).compare(Basic(other)) == Basic(second).compare(Basic(other)) != 0
+    key_hash = hash(keys[0])
+    del keys
+    clear_cache()
+    alias_key = default_sort_key(wrap(second), order=order)
+    assert hash(default_sort_key(wrap(first), order=order)) == key_hash == hash(alias_key)
+
+
+def test_class_literal_sort_key_identity():
+    class UnhashableMeta(type):
+        __hash__ = None
+
+    for metaclass in (type, UnhashableMeta):
+        first = metaclass('SharedName', (), {})
+        second = metaclass('SharedName', (), {})
+        clear_cache()
+        forward = sorted([first, second], key=default_sort_key)
+        clear_cache()
+        backward = sorted([second, first], key=default_sort_key)
+        assert forward == backward
+
+
+def test_class_literal_sort_key_reconstruction():
+    for value in (int, Symbol, cos):
+        key = default_sort_key(value)
+        clear_cache()
+        restored = loads(dumps(key))
+        assert key == restored == default_sort_key(value)
+        assert hash(key) == hash(restored)
+
+
+@pytest.mark.parametrize('value', [Symbol, cos, Function('converted_class', nargs=1)])
+def test_class_literal_sort_key_conversion(value):
+    class Convertible:
+        def _sympy_(self):
+            return value
+
+    assert default_sort_key(Convertible()) == default_sort_key(value)
+
+
+def test_class_literal_sort_key_collection():
+    value = type('CollectedSortKey', (), {})
+    reference = ref(value)
+    key = default_sort_key(value)
+    del value
+    gc.collect()
+    assert reference() is not None
+    del key
+    clear_cache()
+    gc.collect()
+    assert reference() is None
+
+
+def test_class_and_metadata_comparison_key_order():
+    values = [type('Omega', (), {}), ('opaque',), type('Alpha', (), {})]
+    keys = [function_module._get_comparison_key(value) for value in values]
+    expected = sorted(keys)
+    for items in permutations(keys):
+        assert sorted(items) == expected
+    assert all(left < right for left, right in zip(expected, expected[1:]))
+
+
 @pytest.mark.parametrize('order', [None, 'lex', 'grlex', 'grevlex', 'rev-lex'])
 @pytest.mark.parametrize('wrap', [lambda value: value, Tuple,
     lambda value: Function('sort_key_parent')(value)])
