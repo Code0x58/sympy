@@ -397,6 +397,168 @@ def test_class_literal_sort_key_identity():
         assert forward == backward
 
 
+def _class_alias_metaclass():
+    class Meta(type):
+        def __eq__(cls, other):
+            return isinstance(other, Meta) and cls.label == other.label
+
+        def __hash__(cls):
+            return 0
+
+    return Meta
+
+
+def test_equal_class_literal_cold_comparison():
+    Meta = _class_alias_metaclass()
+    first = Meta('Alpha', (), {'label': 1})
+    second = Meta('Zulu', (), {'label': 1})
+    other = Meta('Middle', (), {'label': 2})
+    expressions = list(map(Basic, (first, second, other)))
+    for indices in permutations(range(3)):
+        clear_cache()
+        left, alias, third = [expressions[i] for i in indices]
+        if left != alias:
+            continue
+        comparisons = []
+        for a, b in ((left, third), (alias, third), (third, left), (third, alias)):
+            clear_cache()
+            comparisons.append(a.compare(b))
+        assert comparisons[0] == comparisons[1] != 0
+        assert comparisons[2] == comparisons[3] == -comparisons[0]
+
+
+def test_class_order_survives_representative_collection():
+    Meta = _class_alias_metaclass()
+    first = Meta('Alpha', (), {'label': 1})
+    alias = Meta('Zulu', (), {'label': 1})
+    other = Basic(Meta('Middle', (), {'label': 2}))
+    first_ref = ref(first)
+    expected = Basic(first).compare(other)
+    assert Basic(alias).compare(other) == expected != 0
+    del first
+    clear_cache()
+    gc.collect()
+    assert first_ref() is None
+    assert Basic(alias).compare(other) == expected
+
+
+def test_class_order_reused_identity(monkeypatch):
+    Meta = _class_alias_metaclass()
+    monkeypatch.setattr(function_module, '_class_order_key', lambda cls: ('class', 0))
+    first = Meta('Alpha', (), {'label': 1})
+    alias = Meta('Zulu', (), {'label': 1})
+    reference = ref(first)
+    key = function_module._get_class_order_key(first, hash(first))
+    assert function_module._get_class_order_key(alias, hash(alias)) == key
+    del first
+    clear_cache()
+    gc.collect()
+    assert reference() is None
+    other = Meta('Alpha', (), {'label': 2})
+    assert function_module._get_class_order_key(other, hash(other)) != key
+    assert Basic(alias).compare(Basic(other)) != 0
+
+
+def test_class_order_does_not_retain_names():
+    class Name(str):
+        __slots__ = ('owner',)
+
+    class Meta(type):
+        def __getattribute__(cls, name):
+            if name == '__name__':
+                return type.__getattribute__(cls, 'owned_name')
+            return type.__getattribute__(cls, name)
+
+    value = Meta('Original', (), {})
+    name = Name('Alpha')
+    name.owner = value
+    value.owned_name = name
+    reference = ref(value)
+    assert Basic(value).compare(Basic(type('Omega', (), {}))) != 0
+    del value, name
+    clear_cache()
+    gc.collect()
+    assert reference() is None
+
+
+def test_class_order_reentrant_equality():
+    base = _class_alias_metaclass()
+    retained = []
+    armed = [False]
+
+    class Meta(base):
+        def __eq__(cls, other):
+            if armed[0] and cls.label == 2 and isinstance(other, base) and other.label == 1:
+                armed[0] = False
+                alias = Meta('Zulu', (), {'label': 1})
+                retained.append(alias)
+                function_module._get_class_order_key(alias, hash(alias))
+            return super().__eq__(other)
+
+        __hash__ = base.__hash__
+
+    other = Meta('Middle', (), {'label': 2})
+    function_module._get_class_order_key(other, hash(other))
+    value = Meta('Alpha', (), {'label': 1})
+    armed[0] = True
+    key = function_module._get_class_order_key(value, hash(value))
+    assert not armed[0]
+    assert key == function_module._get_class_order_key(retained[0], hash(retained[0]))
+    assert Basic(value).compare(Basic(other)) == Basic(retained[0]).compare(Basic(other))
+
+
+def test_class_order_equality_registers_unrelated_classes():
+    base = _class_alias_metaclass()
+    retained = []
+
+    class Meta(base):
+        def __eq__(cls, other):
+            if cls.label == 2 and isinstance(other, base) and other.label == 1:
+                if len(retained) == 20:
+                    raise RuntimeError('unrelated registrations prevent progress')
+                unrelated = type('Unrelated', (), {})
+                retained.append(unrelated)
+                function_module._get_class_order_key(unrelated, hash(unrelated))
+            return super().__eq__(other)
+
+        __hash__ = base.__hash__
+
+    other = Meta('Middle', (), {'label': 2})
+    function_module._get_class_order_key(other, hash(other))
+    value = Meta('Alpha', (), {'label': 1})
+    key = function_module._get_class_order_key(value, hash(value))
+    assert retained
+    assert key == function_module._get_class_order_key(value, hash(value))
+
+
+def test_class_order_equality_collects_an_earlier_entry():
+    base = _class_alias_metaclass()
+    discarded = []
+    armed = [False]
+
+    class Meta(base):
+        def __eq__(cls, other):
+            if armed[0] and cls.label == 2 and isinstance(other, base) and other.label == 1:
+                armed[0] = False
+                discarded.clear()
+                gc.collect()
+            return super().__eq__(other)
+
+        __hash__ = base.__hash__
+
+    discarded.append(Meta('Discard', (), {'label': 0}))
+    reference = ref(discarded[0])
+    other = Meta('Middle', (), {'label': 2})
+    alias = Meta('Zulu', (), {'label': 1})
+    for value in (discarded[0], other, alias):
+        function_module._get_class_order_key(value, hash(value))
+    value = Meta('Alpha', (), {'label': 1})
+    armed[0] = True
+    key = function_module._get_class_order_key(value, hash(value))
+    assert reference() is None
+    assert key == function_module._get_class_order_key(alias, hash(alias))
+
+
 def test_class_literal_sort_key_reconstruction():
     for value in (int, Symbol, cos):
         key = default_sort_key(value)

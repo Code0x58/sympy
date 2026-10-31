@@ -973,7 +973,9 @@ _undef_sage_helper = UndefSageHelper()
 
 def _class_order_key(cls):
     """Order distinct class definitions by name and process-local identity."""
-    return type(cls).__name__, cls.__name__, str(cls.__module__), cls.__qualname__, id(cls)
+    names = type(cls).__name__, cls.__name__, str(cls.__module__), cls.__qualname__
+    # Name subclasses must not retain their owning classes through the cache.
+    return tuple(map(str.__str__, names)) + (id(cls),)
 
 
 class _ComparisonKey:
@@ -1003,7 +1005,8 @@ class _ComparisonKey:
         if self_is_class != other_is_class:
             return self_is_class < other_is_class
         if self_is_class:
-            return _class_order_key(self.value) < _class_order_key(other.value)
+            return (_get_class_order_key(self.value, self._hash)
+                    < _get_class_order_key(other.value, other._hash))
         return self.index < other.index
 
     def __repr__(self):
@@ -1013,9 +1016,18 @@ class _ComparisonKey:
         return _get_comparison_key, (self.value,)
 
 
+class _ClassOrderBucket:
+    __slots__ = ('entries', 'epoch')
+
+    def __init__(self):
+        self.entries = []
+        self.epoch = 0
+
+
 _comparison_keys = WeakKeyDictionary()
 _comparison_key_indices = _count()
 _comparison_key_lock = RLock()
+_class_order_keys = {}
 
 
 def _reset_comparison_key_lock():
@@ -1041,6 +1053,53 @@ def _get_comparison_key(value):
             key = _comparison_keys.setdefault(candidate, ref(candidate))()
             if key is not None:
                 return key
+
+
+def _get_class_order_key(cls, cls_hash):
+    """Retain an equality class's order while any registered class is alive."""
+    candidate = None
+    while True:
+        with _comparison_key_lock:
+            bucket = _class_order_keys.get(cls_hash)
+            if bucket is None:
+                bucket = _class_order_keys.setdefault(cls_hash, _ClassOrderBucket())
+            epoch = bucket.epoch
+            snapshot = tuple(bucket.entries)
+            for reference, key in snapshot:
+                if reference() is cls:
+                    return key
+            key = None
+            for reference, existing in snapshot:
+                other = reference()
+                if other is not None and other == cls:
+                    key = existing
+                    break
+            # Equality and collection can reenter and change the registry.
+            if epoch != bucket.epoch:
+                continue
+            if key is None and candidate is not None:
+                # Aliases can retain a snapshot after its original class dies.
+                key = candidate + (next(_comparison_key_indices),)
+            if key is not None:
+                def remove(reference, bucket=bucket, cls_hash=cls_hash):
+                    with _comparison_key_lock:
+                        i = 0
+                        while i < len(bucket.entries):
+                            if bucket.entries[i][0] is reference:
+                                del bucket.entries[i]
+                                bucket.epoch += 1
+                                break
+                            i += 1
+                        if not bucket.entries and _class_order_keys.get(cls_hash) is bucket:
+                            del _class_order_keys[cls_hash]
+
+                entry = ref(cls, remove), key
+                if epoch != bucket.epoch:
+                    continue
+                bucket.entries.append(entry)
+                bucket.epoch += 1
+                return key
+        candidate = _class_order_key(cls)
 
 
 def _canonical_function_metadata(value):
