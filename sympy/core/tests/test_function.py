@@ -1139,6 +1139,23 @@ def test_function_metaclass_identity():
     assert first(x) + second(x) == second(x) + first(x)
 
 
+def test_function_class_keys_do_not_print():
+    class Meta(UndefinedFunction):
+        def __str__(cls):
+            raise RuntimeError('class printing called')
+
+    class F(Function, metaclass=Meta):
+        pass
+
+    class G(Function, metaclass=Meta):
+        pass
+
+    assert F(x).func is F
+    key = F._metadata_sort_key[0]
+    assert not key < key
+    assert key < G._metadata_sort_key[0]
+
+
 @pytest.mark.parametrize('behavior', ['none', 'eval', 'doit'])
 def test_function_subclass_identity(behavior):
     def evaluate(cls, *args):
