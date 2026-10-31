@@ -415,6 +415,17 @@ def test_class_literal_sort_key_conversion(value):
     assert default_sort_key(Convertible()) == default_sort_key(value)
 
 
+@pytest.mark.parametrize('order', [None, 'lex', 'rev-lex', 'grlex', 'grevlex'])
+def test_sympified_sort_key_order(order):
+    expr = x**2 + x + Symbol('y')
+
+    class Convertible:
+        def _sympy_(self):
+            return expr
+
+    assert default_sort_key(Convertible(), order=order) == default_sort_key(expr, order=order)
+
+
 def test_class_literal_sort_key_collection():
     value = type('CollectedSortKey', (), {})
     reference = ref(value)

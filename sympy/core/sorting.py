@@ -170,7 +170,7 @@ def default_sort_key(item, order=None):
             else:
                 if isinstance(item, (Basic, type)):
                     # e.g int -> Integer
-                    return default_sort_key(item)
+                    return default_sort_key(item, order=order)
 
         # e.g. str
         cls_index, args = 0, (1, (str(item),))
