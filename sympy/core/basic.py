@@ -10,7 +10,7 @@ from functools import cmp_to_key
 from typing import TYPE_CHECKING, overload
 
 from .assumptions import _prepare_class_assumptions
-from .cache import cacheit
+from .cache import cacheit, cacheit_by_identity
 from .sympify import _sympify, sympify, SympifyError, _external_converter
 from .sorting import default_sort_key, ordered
 from .kind import Kind, UndefinedKind
@@ -609,7 +609,7 @@ class Basic(Printable):
         """Nice order of classes."""
         return 5, 0, cls.__name__
 
-    @cacheit
+    @cacheit_by_identity
     def sort_key(self, order=None):
         """
         Return a sort key.

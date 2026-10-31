@@ -12,6 +12,7 @@ from weakref import ref
 import sympy.core.function as function_module
 from sympy.core.basic import Basic
 from sympy.core.containers import Tuple
+from sympy.core.expr import Expr
 from sympy.core.cache import clear_cache
 from sympy.core.function import Function, Subs
 from sympy.core.numbers import Float
@@ -458,6 +459,31 @@ def test_class_order_survives_interned_representative(wrap):
     gc.collect()
     assert reference() is None
     assert Basic(alias).compare(other) == expected != 0
+
+
+@pytest.mark.parametrize('order', [None, 'rev-lex'])
+@pytest.mark.parametrize('wrap', [Basic, Expr, lambda value: Basic(Basic(value)),
+    lambda value: Subs(Basic(value), x, 1)])
+def test_class_order_survives_cached_wrapper(wrap, order):
+    Meta = _class_alias_metaclass()
+    first = Meta('Alpha', (), {'label': 1})
+    alias = Meta('Zulu', (), {'label': 1})
+    other = Meta('Middle', (), {'label': 2})
+    reference = ref(first)
+    first_expr, alias_expr, other_expr = map(wrap, (first, alias, other))
+    first_key = default_sort_key(first_expr, order=order)
+    alias_key = default_sort_key(alias_expr, order=order)
+    other_key = default_sort_key(other_expr, order=order)
+    assert first_key == alias_key
+    expected = alias_key < other_key
+    del first, first_expr, first_key, alias_key, other_key
+    clear_cache()
+    gc.collect()
+    assert reference() is None
+    alias_key = default_sort_key(alias_expr, order=order)
+    other_key = default_sort_key(other_expr, order=order)
+    assert (alias_key < other_key) == expected
+    assert (other_key < alias_key) != expected
 
 
 def test_class_order_reused_identity(monkeypatch):

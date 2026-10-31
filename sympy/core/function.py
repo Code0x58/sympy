@@ -46,7 +46,7 @@ from .assumptions import _assume_defined
 from .basic import (Atom, Basic, _atomic, _is_standard_number,
                     _get_postprocessors_for_type, _get_type_attribute,
                     _has_builtin_equality)
-from .cache import cacheit, cached_property
+from .cache import cacheit, cached_property, cacheit_by_identity
 from .containers import Tuple, Dict
 from .decorators import _sympifyit
 from .evalf import pure_complex
@@ -2807,7 +2807,7 @@ class Subs(Expr):
     def _hashable_content(self):
         return self._comparison_key
 
-    @cacheit
+    @cacheit_by_identity
     def sort_key(self, order=None):
         key = default_sort_key(self._comparison_key, order=order)
         return self.class_key(), key[1], key[2], key[3]

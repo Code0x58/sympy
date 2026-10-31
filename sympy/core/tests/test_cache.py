@@ -1,6 +1,7 @@
 from __future__ import annotations
 import sys
-from sympy.core.cache import cacheit, cached_property, lazy_function
+from sympy.core.cache import (USE_CACHE, cacheit, cacheit_by_identity,
+    cached_property, clear_cache, lazy_function)
 from sympy.testing.pytest import raises
 
 def test_cacheit_doc():
@@ -23,6 +24,35 @@ def test_cacheit_unhashable():
     assert testit(a) == {}
     a[1] = 2
     assert testit(a) == {1: 2}
+
+
+def test_cacheit_by_identity():
+    class Equal:
+        def __eq__(self, other):
+            return isinstance(other, Equal)
+
+        def __hash__(self):
+            return 0
+
+        @cacheit_by_identity
+        def capture(self, amount=0, *, identity=None):
+            """Capture the actual receiver and arguments."""
+            return self, amount, identity
+
+    first, second = Equal(), Equal()
+    left, right = first.capture(), second.capture()
+    assert left[0] is first and right[0] is second
+    assert first.capture(2, identity=second) == (first, 2, second)
+    assert first.capture.__name__ == 'capture'
+    assert first.capture.__doc__ == 'Capture the actual receiver and arguments.'
+    assert Equal.capture.__wrapped__(first, 3) == (first, 3, None)
+    if USE_CACHE == 'yes':
+        assert first.capture() is left
+        assert second.capture() is right
+        clear_cache()
+        assert first.capture.cache_info().currsize == 0
+        assert first.capture() is not left
+
 
 def test_cachit_exception():
     # Make sure the cache doesn't call functions multiple times when they

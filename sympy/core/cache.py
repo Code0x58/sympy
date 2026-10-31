@@ -153,6 +153,21 @@ else:
         'unrecognized value for SYMPY_USE_CACHE: %s' % USE_CACHE)
 
 
+def cacheit_by_identity(func):
+    """Cache a method separately for each instance, using cacheit's policies."""
+    @cacheit
+    @wraps(func)
+    def cached(self, identity, /, *args, **kwargs):
+        return func(self, *args, **kwargs)
+
+    @wraps(cached)
+    def wrapper(self, *args, **kwargs):
+        return cached(self, id(self), *args, **kwargs)
+
+    wrapper.__wrapped__ = func
+    return wrapper
+
+
 def cached_property(func):
     '''Decorator to cache property method'''
     attrname = '__' + func.__name__
