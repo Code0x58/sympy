@@ -53,6 +53,9 @@ def _same_class(left, right):
     if not left == right:
         return False
     from .function import UndefinedFunction
+    # An overriding right-hand metaclass can handle equality first.
+    if type(left) is UndefinedFunction and type(right) is UndefinedFunction:
+        return True
     return (isinstance(left, UndefinedFunction)
             and all(type.__dict__['__dict__'].__get__(cls).get('_is_factory') is True
                     for cls in (left, right)))

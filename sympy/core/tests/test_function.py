@@ -2558,6 +2558,23 @@ def test_recreated_factory_instance_identity(passive_metaclass):
     assert first.compare(second) == second.compare(first) == 0
 
 
+def test_factory_and_definition_metaclass_alias():
+    factory = Function('factory_definition_alias')
+    metaclass = _primitive_alias_metaclass(factory)
+    definition = metaclass('factory_definition_alias', (Function,), {
+        'eval': classmethod(lambda cls, arg: S.One if arg == 0 else None)})
+    assert factory == definition and definition == factory
+    for classes in ((factory, definition), (definition, factory)):
+        clear_cache()
+        first, second = [cls(x) for cls in classes]
+        assert first.func is classes[0] and second.func is classes[1]
+        assert first != second and second != first
+        assert first.compare(second) == -second.compare(first) != 0
+    clear_cache()
+    assert factory(x).subs(x, 0) == factory(0)
+    assert definition(x).subs(x, 0) == 1
+
+
 def test_Subs_scope_mask_preserves_held_expression():
     class EvaluatingFunction(Function):
         @classmethod
