@@ -661,6 +661,17 @@ def test_has():
     assert not Symbol("x").has("x")
 
 
+def test_native_argument_query_cache():
+    for wrap in (lambda value: value, Basic, Tuple):
+        expressions = [wrap(Basic(value)) for value in (1, 1.0)]
+        assert expressions[0] == expressions[1]
+        for method in ('has', 'has_free'):
+            for order in ((0, 1), (1, 0)):
+                clear_cache()
+                results = [getattr(expressions[i], method)(S.One) for i in order]
+                assert results == [i == 0 for i in order]
+
+
 def test_subs():
     assert b21.subs(b2, b1) == Basic(b1, b1)
     assert b21.subs(b2, b21) == Basic(b21, b1)

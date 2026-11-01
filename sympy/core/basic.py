@@ -1616,7 +1616,7 @@ class Basic(Printable):
                 return self.func(*args), True
         return self, False
 
-    @cacheit
+    @cacheit_by_identity
     def has(self, *patterns):
         """
         Test whether any subexpression matches any of the patterns.
@@ -1692,7 +1692,7 @@ class Basic(Printable):
             raise TypeError('expecting set argument')
         return any(a in s for a in iterfreeargs(self))
 
-    @cacheit
+    @cacheit_by_identity
     def has_free(self, *patterns):
         """Return True if self has object(s) ``x`` as a free expression
         else False.

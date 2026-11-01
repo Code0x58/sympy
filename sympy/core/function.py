@@ -2631,15 +2631,15 @@ class Subs(Expr):
     >>> a + b
     2*Subs(x, x, 0)
 
-    This can lead to unexpected consequences when using methods
-    like `has` that are cached:
+    Structural queries such as ``has`` inspect the stored arguments,
+    even when requests compare equal:
 
     >>> s = Subs(x, x, 0)
     >>> s.has(x), s.has(y)
     (True, False)
     >>> ss = s.subs(x, y)
     >>> ss.has(x), ss.has(y)
-    (True, False)
+    (False, True)
     >>> s, ss
     (Subs(x, x, 0), Subs(y, y, 0))
 

@@ -661,6 +661,17 @@ def test_Subs_ordered_identity(expr, variables, points, forward, backward):
     assert (first + second).doit() == forward + backward
 
 
+@pytest.mark.parametrize('wrap', [lambda value: value, Basic, Tuple])
+def test_Subs_has_stored_bound_symbols(wrap):
+    expressions = [wrap(Subs(f(variable), variable, 0)) for variable in (x, z)]
+    assert expressions[0] == expressions[1]
+    for index, pattern in enumerate((x, z)):
+        for order in ((0, 1), (1, 0)):
+            clear_cache()
+            assert [expressions[i].has(pattern) for i in order] == [
+                i == index for i in order]
+
+
 def test_Subs_independent_programs():
     first = Subs(f(x, y), (x, y), (0, 1))
     second = Subs(f(x, y), (y, x), (1, 0))
