@@ -448,6 +448,29 @@ def _has_function_behavior(options):
         for name, value in options.items())
 
 
+def _has_class_behavior(cls, trusted_base, modules=()):
+    """Find custom methods anywhere in the actual inheritance order."""
+    if inspect.getattr_static(cls, 'mro') is not type.mro:
+        return True
+    trusted = type.__dict__['__mro__'].__get__(trusted_base)
+    for base in type.__dict__['__mro__'].__get__(cls):
+        if any(base is parent for parent in trusted):
+            continue
+        namespace = type.__dict__['__dict__'].__get__(base)
+        module_name = namespace.get('__module__')
+        module = (inspect.getmodule(base)
+                  if type(module_name) is str and module_name in modules else None)
+        if (module is not None and module.__name__ in modules
+                and module.__dict__.get(base.__name__) is base):
+            continue
+        if any((callable(value) or _has_type_attribute(value, '__get__'))
+               and not (name in ('__dict__', '__weakref__')
+                        and inspect.isgetsetdescriptor(value))
+               for name, value in namespace.items()):
+            return True
+    return False
+
+
 @cacheit
 def _new_function(metadata_key, cls, /, *args, **options):
     """Cache construction using original arguments and normalized metadata."""
@@ -1163,7 +1186,9 @@ class UndefinedFunction(FunctionClass):
         # Only factory functions have identity determined by name and options.
         is_factory = (isinstance(bases, tuple) and tuple.__len__(bases) == 1
                       and tuple.__getitem__(bases, 0) is AppliedUndef and not __dict__
-                      and not _has_function_behavior(kwargs))
+                      and not _has_function_behavior(kwargs)
+                      and (mcl is UndefinedFunction
+                           or not _has_class_behavior(mcl, UndefinedFunction)))
         # Allow Function('f', real=True)
         # and/or Function(Symbol('f', real=True))
         assumptions, kwargs = _filter_assumptions(kwargs)
@@ -1241,15 +1266,8 @@ def _is_uninterpreted_function(cls):
                 and not _get_postprocessors_for_type(cls))
     if type(cls) is not FunctionClass or not issubclass(cls, Function):
         return False
-    for base in cls.__mro__:
-        if base is Function:
-            return (inspect.getattr_static(cls, 'mro') is type.mro
-                    and not _get_postprocessors_for_type(cls))
-        if any(callable(value) or _has_type_attribute(value, '__get__')
-               for name, value in base.__dict__.items()
-               if name not in ('__dict__', '__weakref__')):
-            return False
-    return False
+    return (not _has_class_behavior(cls, Function)
+            and not _get_postprocessors_for_type(cls))
 
 
 def _is_ordinary_symbol(value):
@@ -1261,22 +1279,11 @@ def _is_ordinary_symbol(value):
 @cacheit
 def _has_standard_atom_hooks(cls):
     """Recognize atoms whose hooks preserve an ordinary bound symbol."""
-    if inspect.getattr_static(cls, 'mro') is not type.mro:
-        return False
     modules = (Atom.__module__, AtomicExpr.__module__, Number.__module__,
                Symbol.__module__, 'sympy.logic.boolalg')
     # Custom operators can inspect bound names through rebuilt parents.
-    for base in cls.__mro__:
-        module_name = base.__dict__.get('__module__')
-        module = (inspect.getmodule(base)
-                  if type(module_name) is str and module_name in modules else None)
-        if (module is not None and module.__name__ in modules
-                and module.__dict__.get(base.__name__) is base):
-            break
-        if any(callable(value) or _has_type_attribute(value, '__get__')
-               for name, value in base.__dict__.items()
-               if name not in ('__dict__', '__weakref__')):
-            return False
+    if _has_class_behavior(cls, AtomicExpr, modules):
+        return False
     methods = (
         ('doit', Atom.doit),
         ('_subs', Basic._subs),

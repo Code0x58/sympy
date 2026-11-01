@@ -1170,6 +1170,34 @@ def test_function_metaclass_identity():
     assert first(x) + second(x) == second(x) + first(x)
 
 
+@pytest.mark.parametrize('hidden', [False, True])
+@pytest.mark.parametrize('inherited', [False, True])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_function_metaclass_evaluator_identity(hidden, inherited, reverse):
+    class MetaMeta(type):
+        __dict__ = property(lambda cls: {})
+
+    class EvaluatingMeta(UndefinedFunction, metaclass=MetaMeta if hidden else type):
+        def __new__(mcl, *args, **kwargs):
+            obj = super().__new__(mcl, *args, **kwargs)
+            obj.eval = classmethod(lambda cls, arg:
+                S.Zero if type(cls.value) is int else S.One)
+            return obj
+
+    class InheritedMeta(EvaluatingMeta):
+        pass
+
+    constructor = InheritedMeta if inherited else EvaluatingMeta
+    first = constructor('metaclass_evaluator', value=1)
+    second = constructor('metaclass_evaluator', value=S.One)
+    pairs = ((first, S.Zero), (second, S.One))
+    clear_cache()
+    for function, expected in reversed(pairs) if reverse else pairs:
+        assert function(1) is expected
+    assert first != second
+    assert len({first, second}) == 2
+
+
 def test_function_class_keys_do_not_print():
     class Meta(UndefinedFunction):
         def __str__(cls):
@@ -2347,6 +2375,42 @@ def test_Subs_hidden_function_descriptor():
     assert second.doit() == 1
     assert first != second
     assert (first - second).doit() == -1
+
+
+@pytest.mark.parametrize('kind', ['atom', 'function'])
+@pytest.mark.parametrize('late', [False, True])
+def test_Subs_mixin_evaluation_identity(kind, late):
+    class EvaluationMixin:
+        def __getattribute__(self, name):
+            if kind == 'function' and name == 'doit':
+                return lambda **hints: S.Zero if self.args[0] == x else S.One
+            if kind == 'atom' and name == '_eval_power':
+                return lambda exponent: S.Zero if exponent == x else None
+            return super().__getattribute__(name)
+
+    base = Function if kind == 'function' else AtomicExpr
+    bases = (base, EvaluationMixin) if late else (EvaluationMixin, base)
+    cls = type('WithMixin', bases, {})
+    expressions = [cls(variable) if kind == 'function' else
+                   Pow(cls(), variable, evaluate=False) for variable in (x, z)]
+    first, second = [Subs(expr, variable, 1)
+                     for expr, variable in zip(expressions, (x, z))]
+    assert first.doit() is S.Zero
+    assert second.doit() == (S.One if kind == 'function' else cls())
+    assert first != second
+    assert len({first, second}) == 2
+
+    class PassiveMixin:
+        value = 1
+
+    bases = (base, PassiveMixin) if late else (PassiveMixin, base)
+    passive = type('WithPassiveMixin', bases, {})
+    expressions = [passive(variable) if kind == 'function' else
+                   Pow(passive(), variable, evaluate=False) for variable in (x, z)]
+    first, second = [Subs(expr, variable, 1)
+                     for expr, variable in zip(expressions, (x, z))]
+    assert first == second
+    assert hash(first) == hash(second)
 
 
 def test_Subs_multiple_symbols_preserve_atom_operators():
