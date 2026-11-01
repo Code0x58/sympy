@@ -2476,6 +2476,40 @@ def test_Subs_scope_mask_preserves_held_expression():
     assert source.subs(y, x).args == source.args
 
 
+@pytest.mark.parametrize('variable', [x, z])
+@pytest.mark.parametrize('point', [S.Zero, y])
+@pytest.mark.parametrize('deep', [False, True])
+def test_Subs_scope_preserves_custom_constructor(variable, point, deep):
+    class Opaque(Expr):
+        def __new__(cls, arg):
+            arg = sympify(arg)
+            if type(arg) is Dummy:
+                return S(7)
+            return Expr.__new__(cls, arg)
+
+    source = Subs(Opaque(variable) + y, variable, point)
+    expected = Opaque(point.subs(y, variable)) + variable
+    assert source.subs(y, variable).doit(deep=deep) == expected
+
+
+@pytest.mark.parametrize('variable', [x, z])
+@pytest.mark.parametrize('point', [S.Zero, y])
+@pytest.mark.parametrize('deep', [False, True])
+@pytest.mark.thread_unsafe(reason='changes constructor postprocessors')
+def test_Subs_scope_preserves_dummy_postprocessors(variable, point, deep):
+    mapping = Basic._constructor_postprocessor_mapping
+    assert Dummy not in mapping
+    mapping[Dummy] = {'Pow': [lambda expr: S(7)]}
+    clear_cache()
+    try:
+        source = Subs(variable**2 + y, variable, point)
+        expected = point.subs(y, variable)**2 + variable
+        assert source.subs(y, variable).doit(deep=deep) == expected
+    finally:
+        del mapping[Dummy]
+        clear_cache()
+
+
 @pytest.mark.parametrize('reverse', [False, True])
 def test_Subs_numeric_pattern_class_alias(reverse):
     class AliasFloat(Float, metaclass=_primitive_alias_metaclass(Symbol)):

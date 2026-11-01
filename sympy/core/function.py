@@ -2992,6 +2992,13 @@ class Subs(Expr):
                         return self.func(self.expr, v, points)
                     if all(unchanged(point) for point in pt):
                         return self
+            # An ordered request preserves scope without introducing symbols
+            # that opaque constructors or postprocessors could evaluate.
+            if (type(self) is Subs and len(v) == 1
+                    and _is_ordinary_symbol(old) and _is_ordinary_symbol(new)
+                    and (_get_postprocessors_for_type(Dummy)
+                         or old in self.free_symbols and not self._comparison_key[0])):
+                return Subs(self, old, new)
             if len(v) > 1:
                 def can_rename(variable, *args, point=S.One):
                     # The extra occurrence makes the proof inspect all hooks.
