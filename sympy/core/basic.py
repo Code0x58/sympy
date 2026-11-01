@@ -2535,11 +2535,10 @@ _aresame = Basic.is_same  # for sake of others importing this
 
 class _NativeSortKey:
     """Order native fields with Basic's comparison, retaining native hashes."""
-    __slots__ = ('_content', '_basic')
+    __slots__ = ('_content',)
 
     def __init__(self, value):
-        self._basic = Basic(value)
-        self._content = self._basic.args
+        self._content = (value,)
 
     def __eq__(self, other):
         content = other._content if isinstance(other, _NativeSortKey) else (other,)
@@ -2553,8 +2552,7 @@ class _NativeSortKey:
         # Exact tuple fields share Basic's tuple ordering.
         if type(self._content[0]) is tuple and type(content[0]) is tuple:
             return _compare_tuple_args(self._content[0], content[0])
-        return self._basic.compare(
-            other._basic if isinstance(other, _NativeSortKey) else Basic(*content))
+        return Basic(*self._content).compare(Basic(*content))
 
     def __lt__(self, other):
         return self._compare(other) < 0
