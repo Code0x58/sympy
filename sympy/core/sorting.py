@@ -134,7 +134,8 @@ def default_sort_key(item, order=None):
     cls_name = None
     if isinstance(item, type):
         from .function import UndefinedFunction, _class_order_key, _get_comparison_key
-        if isinstance(item, UndefinedFunction):
+        if (isinstance(item, UndefinedFunction)
+                and type.__dict__['__dict__'].__get__(item).get('_is_factory') is True):
             args = (item.class_key(), item._metadata_sort_key)
         else:
             cls_name = 'type'

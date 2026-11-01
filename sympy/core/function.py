@@ -1189,7 +1189,8 @@ class UndefinedFunction(FunctionClass):
                       and tuple.__getitem__(bases, 0) is AppliedUndef and not __dict__
                       and not _has_function_behavior(kwargs)
                       and (mcl is UndefinedFunction
-                           or not _has_class_behavior(mcl, UndefinedFunction)))
+                           or not (_has_class_behavior(mcl, UndefinedFunction)
+                                   or _has_class_behavior(type(mcl), type))))
         # Allow Function('f', real=True)
         # and/or Function(Symbol('f', real=True))
         assumptions, kwargs = _filter_assumptions(kwargs)
@@ -1227,8 +1228,6 @@ class UndefinedFunction(FunctionClass):
         obj = super().__new__(mcl, name, bases, __dict__)  # type: ignore
         obj.name = name
         obj._sage_ = _undef_sage_helper
-        if not is_factory:
-            obj._metadata_sort_key = (_get_comparison_key(obj),)
         return obj  # type: ignore
 
     def __instancecheck__(cls, instance):

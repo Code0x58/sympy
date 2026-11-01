@@ -21,6 +21,7 @@ from sympy.core.numbers import E, Float, Integer, zoo, Rational, pi, I, oo, nan
 from sympy.core.power import Pow
 from sympy.core.relational import Eq
 from sympy.core.singleton import S
+from sympy.core.sorting import default_sort_key
 from sympy.core.symbol import symbols, Dummy, Symbol
 from sympy.functions.elementary.complexes import Abs, im, re, sign
 from sympy.functions.elementary.exponential import log, exp
@@ -1181,6 +1182,93 @@ def test_function_metaclass_identity():
     assert first(x) + second(x) == second(x) + first(x)
 
 
+@pytest.mark.parametrize('inherited', [False, True])
+@pytest.mark.parametrize('hidden', [False, True])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_function_metametaclass_evaluator_identity(inherited, hidden, reverse):
+    class OwnerMeta(type):
+        if hidden:
+            __dict__ = property(lambda cls: {})
+
+        def __call__(mcl, *args, **kwargs):
+            function = super().__call__(*args, **kwargs)
+            value = S.One if type(function.value) is int else S(2)
+            function.eval = classmethod(lambda cls, arg: value if arg == 0 else None)
+            return function
+
+    class InheritedMeta(OwnerMeta):
+        pass
+
+    metametaclass = InheritedMeta if inherited else OwnerMeta
+    metaclass = metametaclass('Factory', (UndefinedFunction,), {})
+    first = metaclass('metameta_evaluator', value=1)
+    second = metaclass('metameta_evaluator', value=S.One)
+    classes = (second, first) if reverse else (first, second)
+    clear_cache()
+    values = [cls(x) for cls in classes]
+    assert all(value.func is cls for value, cls in zip(values, classes))
+    assert first != second and values[0] != values[1]
+    assert first(x).subs(x, 0) == 1
+    assert second(x).subs(x, 0) == 2
+    assert (values[0] + values[1]).subs(x, 0) == 3
+
+
+@pytest.mark.parametrize('hashable', [False, True])
+def test_function_metametaclass_equality(hashable):
+    class MetaMeta(type):
+        def __eq__(cls, other):
+            return isinstance(other, MetaMeta)
+
+        __hash__ = (lambda cls: 0) if hashable else None
+
+    metaclasses = [MetaMeta('Alias', (UndefinedFunction,), {}) for _ in range(2)]
+    first, second = [metaclass('metameta_alias') for metaclass in metaclasses]
+    assert metaclasses[0] == metaclasses[1]
+    assert first != second
+    assert default_sort_key(first) != default_sort_key(second)
+    for classes in ((first, second), (second, first)):
+        clear_cache()
+        values = [cls(x) for cls in classes]
+        assert all(value.func is cls for value, cls in zip(values, classes))
+        assert values[0] != values[1]
+        assert values[0].compare(values[1]) == -values[1].compare(values[0]) != 0
+
+
+def test_function_passive_metametaclass():
+    class MetaMeta(type):
+        pass
+
+    class Factory(UndefinedFunction, metaclass=MetaMeta):
+        pass
+
+    first = Factory('passive_metameta', value=1)
+    second = Factory('passive_metameta', value=S.One)
+    assert first is not second
+    assert first == second and hash(first) == hash(second)
+    assert default_sort_key(first) == default_sort_key(second)
+    assert first(x) == second(x)
+    assert first(x).compare(second(x)) == 0
+
+
+@pytest.mark.parametrize('owner', [False, True])
+def test_function_unhashable_class_metaclass(owner):
+    class Meta(UndefinedFunction):
+        if owner:
+            def __eq__(cls, other):
+                return cls is other
+
+        __hash__ = None
+
+    first, second = Meta('unhashable_function'), Meta('unhashable_function')
+    raises(TypeError, lambda: hash(first))
+    assert first(x).func is first and second(x).func is second
+    assert (first == second) is not owner
+    assert (default_sort_key(first) == default_sort_key(second)) is not owner
+    assert (default_sort_key(Basic(first)) == default_sort_key(Basic(second))) is not owner
+    assert first(x).compare(second(x)) == -second(x).compare(first(x))
+    assert (first(x).compare(second(x)) == 0) is not owner
+
+
 @pytest.mark.parametrize('hidden', [False, True])
 @pytest.mark.parametrize('inherited', [False, True])
 @pytest.mark.parametrize('reverse', [False, True])
@@ -1221,9 +1309,9 @@ def test_function_class_keys_do_not_print():
         pass
 
     assert F(x).func is F
-    key = F._metadata_sort_key[0]
+    key = default_sort_key(F)
     assert not key < key
-    assert key < G._metadata_sort_key[0]
+    assert key < default_sort_key(G)
 
 
 @pytest.mark.parametrize('behavior', ['none', 'eval', 'doit'])

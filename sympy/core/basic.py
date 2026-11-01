@@ -603,8 +603,8 @@ class Basic(Printable):
             return 0
         if not isinstance(other, Basic):
             return -1
-        n1 = self.__class__
-        n2 = other.__class__
+        n1 = type(self)
+        n2 = type(other)
         c = _cmp_name(n1, n2)
         if c:
             return c
@@ -2561,7 +2561,10 @@ class Basic(Printable):
                     return False
                 if approx:
                     return approx(a, b)
-            if not (a == b and a.__class__ == b.__class__):
+            if not a == b:
+                return False
+            a_type, b_type = type(a), type(b)
+            if a_type is not b_type and not _same_class(a_type, b_type):
                 return False
         return True
 

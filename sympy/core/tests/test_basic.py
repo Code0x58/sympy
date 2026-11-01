@@ -700,6 +700,25 @@ def test_class_alias_instance_identity():
             'is_Number': True, '__hash__': lambda self: 0})() for name in names]
         assert numbers[0] == numbers[1] and hash(numbers[0]) == hash(numbers[1])
         assert Basic(numbers[0]) != Basic(numbers[1])
+        assert not Basic.is_same(numbers[0], numbers[1])
+        assert numbers[0].replace(lambda node: node is numbers[0],
+                                  lambda node: numbers[1]) is numbers[1]
+
+
+def test_compare_actual_instance_class():
+    class PretendingBasic(Basic):
+        @property
+        def __class__(self):
+            return self.reported_class
+
+    first, second = PretendingBasic(1), PretendingBasic(1)
+    first.reported_class, second.reported_class = Basic, Symbol
+    assert first == second and hash(first) == hash(second)
+    assert Basic.is_same(first, second)
+    assert first.compare(second) == second.compare(first) == 0
+    plain = Basic(1)
+    assert plain != first
+    assert plain.compare(first) == -first.compare(plain) != 0
 
 
 def test_matches_basic():
