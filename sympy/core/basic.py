@@ -251,6 +251,9 @@ def _same_structure(a, b):
         operation, data = pending.pop()
         if operation == 'compare':
             a, b = data
+            if a is missing or b is missing:
+                result = False
+                continue
             if a is b:
                 result = True
                 continue
@@ -268,6 +271,7 @@ def _same_structure(a, b):
                 result = False
                 continue
             check_value = a_type is not Basic
+            pairs = None
             if isinstance(a, Basic):
                 first, second = root_args if data is root else (a.args, b.args)
             elif _has_builtin_equality(a, frozenset):
@@ -288,6 +292,9 @@ def _same_structure(a, b):
             elif _has_builtin_equality(a, tuple):
                 first, second = tuple(tuple.__iter__(a)), tuple(tuple.__iter__(b))
                 check_value = False
+            elif a_type is list:
+                first, second = a, b
+                check_value = False
             elif isinstance(a, type):
                 first = second = ()
             else:
@@ -295,18 +302,23 @@ def _same_structure(a, b):
                 if a_iterable != b_iterable:
                     result = False
                     continue
-                first, second = (tuple(a), tuple(b)) if a_iterable else ((), ())
-            if len(first) != len(second):
-                result = False
-                continue
-            # Exact Basic and built-in tuples have no additional equality data.
-            if all(left is right for left, right in zip(first, second)):
-                result = not check_value or bool(a == b)
-                continue
+                if a_iterable:
+                    pairs = zip_longest(a, b, fillvalue=missing)
+                else:
+                    first = second = ()
+            if pairs is None:
+                if len(first) != len(second):
+                    result = False
+                    continue
+                # These concrete types have no additional equality data.
+                if all(left is right for left, right in zip(first, second)):
+                    result = not check_value or bool(a == b)
+                    continue
+                pairs = zip(first, second)
             if check_value:
                 pending.append(('value', (a, b)))
             pending.append(('all', iter(
-                ('compare', pair) for pair in zip(first, second))))
+                ('compare', pair) for pair in pairs)))
             result = True
         elif operation == 'value':
             if result:

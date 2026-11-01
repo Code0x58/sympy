@@ -271,6 +271,35 @@ def test_is_same_cycles():
         Basic.is_same(left, right)
 
 
+def test_is_same_lazy_iterables():
+    class Stream:
+        def __init__(self, first):
+            self.first = first
+
+        def __iter__(self):
+            yield self.first
+            raise ValueError('unvisited tail')
+
+    for wrap in (lambda value: value, Basic):
+        left, right = wrap(Stream(S.Zero)), wrap(Stream(S.One))
+        assert not Basic.is_same(left, right)
+        assert not Basic.is_same(right, left)
+        with raises(ValueError, match='unvisited tail'):
+            Basic.is_same(wrap(Stream(S.One)), wrap(Stream(S.One)))
+
+
+def test_is_same_iterable_lengths():
+    class Sequence(list):
+        pass
+
+    for first, second in (([], [S.One]), ([S.One], [S.One, S(2)]),
+                          ([None], [None, None])):
+        left, right = Sequence(first), Sequence(second)
+        for wrap in (lambda value: value, Basic):
+            assert not Basic.is_same(wrap(left), wrap(right))
+            assert not Basic.is_same(wrap(right), wrap(left))
+
+
 def test_structure():
     assert b21.args == (b2, b1)
     assert b21.func(*b21.args) == b21
