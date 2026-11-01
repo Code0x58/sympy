@@ -109,6 +109,52 @@ def test_iterargs_atomic_arguments():
     assert list(iterfreeargs(source)) == [source, f]
 
 
+def test_traversal_class_literals():
+    class IterableMeta(type):
+        def __iter__(cls):
+            raise AssertionError('class literal was iterated')
+
+    value = IterableMeta('Value', (), {})
+    for wrap in (Basic, lambda value: Tuple(value, sympify=False)):
+        source = wrap(value)
+        for traversal in (preorder_traversal, postorder_traversal):
+            for keys in (None, True, default_sort_key):
+                assert list(traversal(value, keys=keys)) == [value]
+                expected = [source, value] if traversal is preorder_traversal else [value, source]
+                assert list(traversal(source, keys=keys)) == expected
+        for traversal in (iterargs, iterfreeargs):
+            assert list(traversal(value)) == [value]
+            assert list(traversal(source)) == [source, value]
+        assert Basic.is_same(source, wrap(value))
+    assert Basic.is_same(value, value)
+
+
+def test_iterargs_class_child_sequence():
+    class IterableMeta(type):
+        def __iter__(cls):
+            raise AssertionError('class literal was iterated')
+
+    class Native:
+        args = IterableMeta('Children', (), {})
+
+    value = Native()
+    source = Basic(value)
+    for traversal in (iterargs, iterfreeargs):
+        assert list(traversal(source)) == [source, value]
+    assert source.replace(lambda node: node is value, lambda node: S.One) == Basic(S.One)
+
+
+def test_traversal_native_iteration_error():
+    class Value:
+        def __iter__(self):
+            raise ValueError('iteration failed')
+
+    for traversal in (preorder_traversal, postorder_traversal):
+        for value in (Value(), Basic(Value())):
+            with raises(ValueError, match='iteration failed'):
+                list(traversal(value))
+
+
 def test_iterargs_native_arguments():
     class Node:
         def __init__(self, *args):

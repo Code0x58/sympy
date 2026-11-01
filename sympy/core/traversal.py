@@ -147,7 +147,7 @@ class preorder_traversal:
                     args = ordered(args)
             for arg in args:
                 yield from self._preorder_traversal(arg, keys)
-        elif iterable(node):
+        elif not isinstance(node, type) and iterable(node):
             for item in node:
                 yield from self._preorder_traversal(item, keys)
 
@@ -312,7 +312,7 @@ def postorder_traversal(node, keys=None):
                 args = ordered(args)
         for arg in args:
             yield from postorder_traversal(arg, keys)
-    elif iterable(node):
+    elif not isinstance(node, type) and iterable(node):
         for item in node:
             yield from postorder_traversal(item, keys)
     yield node

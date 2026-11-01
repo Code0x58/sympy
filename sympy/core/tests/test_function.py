@@ -1993,7 +1993,8 @@ def test_nested_binding_free_queries(outer, free, depends_on_outer):
     assert not source.has_xfree({Tuple(label) for label in symbols('_0:4')})
 
 
-@pytest.mark.parametrize('wrap', [lambda value: value, Basic, Tuple, g])
+@pytest.mark.parametrize('wrap', [lambda value: value, Basic, Tuple, g,
+                                lambda value: Basic(None, value)])
 @pytest.mark.parametrize('simultaneous', [False, True])
 @pytest.mark.parametrize('mapping', [False, True])
 def test_replace_equal_binding_structure(wrap, simultaneous, mapping):

@@ -227,7 +227,7 @@ def _args_equal(left, right):
 
 def _iterable_args(args):
     """Return an iterable argument sequence, or an empty tuple for a leaf."""
-    return args if iterable(args, exclude=NotIterable) else ()
+    return args if not isinstance(args, type) and iterable(args, exclude=NotIterable) else ()
 
 
 def _free_symbol_names(expr):
@@ -2552,10 +2552,10 @@ class Basic(Printable):
         """
         from .numbers import Number
         from .traversal import postorder_traversal as pot
-        for t in zip_longest(pot(a), pot(b)):
-            if None in t:
+        missing = object()
+        for a, b in zip_longest(pot(a), pot(b), fillvalue=missing):
+            if a is missing or b is missing:
                 return False
-            a, b = t
             if isinstance(a, Number):
                 if not isinstance(b, Number):
                     return False

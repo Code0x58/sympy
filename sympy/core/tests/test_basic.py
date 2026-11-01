@@ -43,6 +43,42 @@ def test__aresame():
             i, j = j, i
 
 
+def test_is_same_native_none():
+    x = Symbol('x')
+    for value in (None, Basic(None), Basic(None, x), Basic((None, x)), (None, x)):
+        assert Basic.is_same(value, value)
+    assert Basic.is_same(Basic(None, x), Basic(None, x))
+    assert not Basic.is_same(Basic(None), Basic())
+    assert not Basic.is_same(Basic(), Basic(None))
+    assert not Basic.is_same(Basic(None, x), Basic(x, None))
+
+
+def test_is_same_missing_values():
+    class Value:
+        def __eq__(self, other):
+            if other is None:
+                raise ValueError('unexpected comparison with None')
+            return isinstance(other, Value)
+
+    first, second = Value(), Value()
+    assert Basic.is_same(first, second)
+    assert Basic.is_same(Basic(first), Basic(second))
+    assert not Basic.is_same(Basic(first), Basic())
+    assert not Basic.is_same(Basic(), Basic(second))
+
+
+def test_replace_equal_native_none():
+    x = Symbol('x')
+    for wrap in (lambda value: value, Basic, Tuple):
+        for simultaneous in (False, True):
+            original, replacement = Basic(None, x), Basic(None, x)
+            source = wrap(original)
+            result, changes = source.replace(lambda node: node is original,
+                lambda node: replacement, map=True, simultaneous=simultaneous)
+            assert result is source
+            assert changes == {}
+
+
 def test_structure():
     assert b21.args == (b2, b1)
     assert b21.func(*b21.args) == b21
