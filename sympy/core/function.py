@@ -1252,6 +1252,12 @@ def _is_uninterpreted_function(cls):
     return False
 
 
+def _is_ordinary_symbol(value):
+    """Recognize exact Symbol and Dummy instances."""
+    cls = type(value)
+    return cls is Symbol or cls is Dummy
+
+
 @cacheit
 def _has_standard_atom_hooks(cls):
     """Recognize atoms whose hooks preserve an ordinary bound symbol."""
@@ -2831,7 +2837,7 @@ class Subs(Expr):
 
         # Normalize one active ordinary symbol only when renaming is reversible.
         # Order, assumptions, nested scopes and evaluators can matter.
-        if (len(variables) != 1 or type(variables[0]) not in (Symbol, Dummy)
+        if (len(variables) != 1 or not _is_ordinary_symbol(variables[0])
                 or variables[0].assumptions0 != {'commutative': True}
                 or getattr(point[0], 'is_commutative', None) is not True):
             return key
@@ -2852,8 +2858,8 @@ class Subs(Expr):
                 if ((type(cls) is not type and type(cls) is not Singleton)
                         or node.args or not _has_standard_atom_hooks(cls)):
                     return key
-            elif type(node) not in (Basic, Expr, Add, Mul, Pow, Derivative,
-                                   Tuple, Dict, Integral):
+            elif not any(type(node) is cls for cls in (
+                    Basic, Expr, Add, Mul, Pow, Derivative, Tuple, Dict, Integral)):
                 return key
             if _get_postprocessors_for_type(type(node)):
                 return key
@@ -2910,7 +2916,7 @@ class Subs(Expr):
         pt = list(self.point)
         if old in self.variables:
             # A neutral rename must preserve evaluation, domain, and free points.
-            if (type(old) in (Symbol, Dummy) and type(new) in (Symbol, Dummy)
+            if (_is_ordinary_symbol(old) and _is_ordinary_symbol(new)
                     and self._comparison_key[0]
                     and old.assumptions0 == new.assumptions0
                     and old not in self.free_symbols
@@ -2927,7 +2933,7 @@ class Subs(Expr):
         if v != list(self.variables):
             return self.func(self.expr, self.variables + (old,), pt + [new])
         active = []
-        if (all(type(variable) in (Symbol, Dummy) for variable in v)
+        if (all(_is_ordinary_symbol(variable) for variable in v)
                 and (len(v) == 1 or type(self) is Subs and not has_dups(v))):
             follow_points = len(v) > 1 and needs_mask(v)
             free = set() if isinstance(self.expr, type) else set(self.expr.free_symbols)
@@ -2945,7 +2951,7 @@ class Subs(Expr):
                 needs_mask([variable for _, variable in active])
                 or isinstance(old, FunctionClass) and callable(new)
                 and not _is_uninterpreted_function(new) and self._comparison_key[0])):
-            if type(old) in (Symbol, Dummy) and old not in free:
+            if _is_ordinary_symbol(old) and old not in free:
                 def unchanged(arg):
                     for node in iterargs(arg):
                         if isinstance(node, type):
@@ -3034,7 +3040,7 @@ class Subs(Expr):
         value = self.doit()
         if value != self:
             return diff(value, s)
-        if any(type(v) not in (Symbol, Dummy) for v in self.variables):
+        if any(not _is_ordinary_symbol(v) for v in self.variables):
             return None
 
         # Apply the chain rule of the derivative on the substitution variables:

@@ -71,6 +71,20 @@ class _HiddenDescriptorMeta(type):
         return super().__getattribute__(name)
 
 
+def _primitive_alias_metaclass(target):
+    class Meta(type):
+        _alias_target = target
+
+        def __eq__(cls, other):
+            return (other is target or isinstance(other, type)
+                    and type(other).__dict__.get('_alias_target') is target)
+
+        def __hash__(cls):
+            return hash(target)
+
+    return Meta
+
+
 def test_f_expand_complex():
     x = Symbol('x', real=True)
 
@@ -2396,6 +2410,41 @@ def test_Subs_scope_mask_preserves_held_expression():
 
     source = Subs(EvaluatingFunction(x), x, 0)
     assert source.subs(y, x).args == source.args
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_Subs_numeric_pattern_class_alias(reverse):
+    class AliasFloat(Float, metaclass=_primitive_alias_metaclass(Symbol)):
+        pass
+
+    alias, ordinary = AliasFloat(-1), Float(-1)
+    assert type(alias) is AliasFloat and type(alias) == Symbol
+    assert alias == ordinary and ordinary == alias
+    assert hash(alias) == hash(ordinary)
+    source = Subs(Tuple(x, Float(1)), x, 0)
+    patterns = (ordinary, alias) if reverse else (alias, ordinary)
+    clear_cache()
+    for pattern in patterns:
+        assert source.subs(pattern, x).doit(deep=False) == Tuple(0, -x)
+
+
+@pytest.mark.parametrize('wrap', [lambda expr: expr, lambda expr: Tuple(expr)])
+def test_Subs_opaque_expression_class_alias(wrap):
+    class Opaque(Expr, metaclass=_primitive_alias_metaclass(Expr)):
+        def __eq__(self, other):
+            return type(self) is type(other) and self.args == other.args
+
+        __hash__ = Basic.__hash__
+
+        def doit(self, **hints):
+            return S.Zero if self.args[0] == x else S.One
+
+    first, second = Subs(wrap(Opaque(x)), x, 0), Subs(wrap(Opaque(z)), z, 0)
+    assert type(Opaque(x)) == Expr
+    assert first.doit() == wrap(S.Zero)
+    assert second.doit() == wrap(S.One)
+    assert first != second
+    assert len({first, second}) == 2
 
 
 @pytest.mark.parametrize('replacement', [x, Dummy('replacement')])
