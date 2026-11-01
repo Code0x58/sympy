@@ -15,7 +15,7 @@ from sympy.core.cache import clear_cache
 from sympy.core.containers import Dict, Tuple
 from sympy.core.expr import AtomicExpr, Expr, unchanged
 from sympy.core.function import (Subs, Function, diff, Lambda, expand,
-    nfloat, Derivative, UndefinedFunction, AppliedUndef)
+    nfloat, Derivative, UndefinedFunction, AppliedUndef, DefinedFunction, Application)
 from sympy.core.mul import Mul
 from sympy.core.numbers import E, Float, Integer, zoo, Rational, pi, I, oo, nan
 from sympy.core.power import Pow
@@ -72,7 +72,7 @@ class _HiddenDescriptorMeta(type):
 
 
 def _primitive_alias_metaclass(target):
-    class Meta(type):
+    class Meta(type(target)):
         _alias_target = target
 
         def __eq__(cls, other):
@@ -2463,6 +2463,62 @@ def test_Subs_constructor_postprocessor_identity(kind):
     finally:
         del Basic._constructor_postprocessor_mapping[cls]
         clear_cache()
+
+
+@pytest.mark.parametrize('base', [AtomicExpr, Function, DefinedFunction])
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.thread_unsafe(reason='changes constructor postprocessors')
+def test_constructor_class_alias_postprocessors(base, reverse):
+    class Strict(base):
+        def __eq__(self, other):
+            return type(self) is type(other) and self.args == other.args
+
+        __hash__ = Basic.__hash__
+
+    class FirstBase(Strict):
+        pass
+
+    class SecondBase(Strict):
+        pass
+
+    metaclass = _primitive_alias_metaclass(Strict)
+    first = metaclass('Alias', (FirstBase,), {})
+    second = metaclass('Alias', (SecondBase,), {})
+    assert first == second and hash(first) == hash(second)
+    mapping = Basic._constructor_postprocessor_mapping
+    mapping[FirstBase] = {'Pow': [lambda expr: S.Zero]}
+    mapping[SecondBase] = {'Pow': [lambda expr: S.One]}
+    pairs = ((first, S.Zero), (second, S.One))
+    clear_cache()
+    try:
+        for cls, expected in reversed(pairs) if reverse else pairs:
+            value = cls()
+            assert value.func is cls
+            assert Pow(value, 2) is expected
+        assert first() != second()
+    finally:
+        del mapping[FirstBase]
+        del mapping[SecondBase]
+        clear_cache()
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_application_class_alias_construction(reverse):
+    class Strict(Application):
+        def __eq__(self, other):
+            return type(self) is type(other) and self.args == other.args
+
+        __hash__ = Basic.__hash__
+
+    metaclass = _primitive_alias_metaclass(Strict)
+    first = metaclass('Alias', (Strict,), {})
+    second = metaclass('Alias', (Strict,), {})
+    assert first == second and hash(first) == hash(second)
+    clear_cache()
+    for cls in (second, first) if reverse else (first, second):
+        value = cls(x)
+        assert value.func is cls and value.args == (x,)
+    assert first(x) != second(x)
 
 
 def test_Subs_scope_mask_preserves_held_expression():

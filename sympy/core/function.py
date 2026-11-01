@@ -337,7 +337,7 @@ class Application(Basic, metaclass=FunctionClass):
 
     is_Function = True
 
-    @cacheit
+    @cacheit_by_identity
     def __new__(cls, *args, **options):
         from sympy.sets.fancysets import Naturals0
         from sympy.sets.sets import FiniteSet
@@ -549,7 +549,8 @@ class Function(Application, Expr):
                 return UndefinedFunction(*args, **options)
             key = _function_metadata_key(options)
         else:
-            key = None
+            key = (None if type(cls) is FunctionClass or type(cls) is UndefinedFunction
+                   else id(cls))
         return _new_function(key, cls, *args, **options)
 
     @classmethod
@@ -933,7 +934,7 @@ class Function(Application, Expr):
 class DefinedFunction(Function):
     """Base class for defined functions like ``sin``, ``cos``, ..."""
 
-    @cacheit
+    @cacheit_by_identity
     def __new__(cls, *args, **options) -> Expr:  # type: ignore
         return cls._new_(*args, **options)
 

@@ -239,8 +239,8 @@ def _cmp_name(x: type, y: type) -> int:
 
 
 
-@cacheit
-def _get_postprocessors(clsname, arg_type):
+@cacheit_by_identity
+def _get_postprocessors(arg_type, clsname):
     # Since only Add, Mul, and Pow can be clsname, this cache
     # is not quadratic.
     postprocessors = set()
@@ -251,7 +251,7 @@ def _get_postprocessors(clsname, arg_type):
             postprocessors.update(f)
     return postprocessors
 
-@cacheit
+@cacheit_by_identity
 def _get_postprocessors_for_type(arg_type):
     return tuple(
         Basic._constructor_postprocessor_mapping[cls]
@@ -2437,7 +2437,7 @@ class Basic(Printable):
 
         clsname = obj.__class__.__name__
         postprocessors = {f for i in obj.args
-                            for f in _get_postprocessors(clsname, type(i))}
+                            for f in _get_postprocessors(type(i), clsname)}
         for f in postprocessors:
             obj = f(obj)
 
