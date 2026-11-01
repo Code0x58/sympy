@@ -1,4 +1,6 @@
 from __future__ import annotations
+from pathlib import Path
+from runpy import run_path
 import sys
 from sympy.core.cache import (USE_CACHE, cacheit, cacheit_by_identity,
     cached_property, clear_cache, lazy_function)
@@ -67,6 +69,69 @@ def test_cacheit_by_identity_keyword_forwarding():
     assert Receiver.capture(receiver=value, self='self', identity='identity') == result
     if USE_CACHE == 'yes':
         assert value.capture(self='self', identity='identity') is result
+
+
+def test_cacheit_by_identity_policies(monkeypatch):
+    for mode in ('yes', 'no', 'debug'):
+        for size in ('0', '2', 'None'):
+            monkeypatch.setenv('SYMPY_USE_CACHE', mode)
+            monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
+            scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+            decorate = scope['cacheit_by_identity']
+
+            class Equal:
+                def __eq__(self, other):
+                    return isinstance(other, Equal)
+
+                def __hash__(self):
+                    return 0
+
+                @decorate
+                def capture(self, value=0):
+                    return id(self), value
+
+            first, second = Equal(), Equal()
+            left, right = first.capture(), second.capture()
+            assert left == (id(first), 0) and right == (id(second), 0)
+            repeated = first.capture()
+            if mode == 'yes' and size != '0':
+                assert repeated is left
+            else:
+                assert repeated is not left and repeated == left
+            assert Equal.capture(self=first, value=3) == (id(first), 3)
+            assert Equal.capture.__wrapped__(first, 4) == (id(first), 4)
+            if mode == 'yes':
+                expected_size = None if size == 'None' else int(size)
+                assert first.capture.cache_info().maxsize == expected_size
+                scope['clear_cache']()
+                assert first.capture.cache_info().currsize == 0
+
+            calls = []
+
+            @decorate
+            def length(receiver, values):
+                calls.append(id(receiver))
+                return len(values)
+
+            for receiver, values in ((object(), []), ([], ()), ([], [])):
+                calls.clear()
+                assert length(receiver, values) == length(receiver, values) == 0
+                assert len(calls) == (4 if mode == 'debug' else 2)
+                assert all(value == id(receiver) for value in calls)
+
+
+def test_cacheit_by_identity_exceptions():
+    calls = []
+
+    @cacheit_by_identity
+    def fail(receiver, value):
+        calls.append(receiver)
+        raise TypeError('identity cache failure')
+
+    for receiver, value in ((object(), 0), ([], 0), (object(), [])):
+        calls.clear()
+        raises(TypeError, lambda: fail(receiver, value))
+        assert len(calls) == 1 and calls[0] is receiver
 
 
 def test_cachit_exception():

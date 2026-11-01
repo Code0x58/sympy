@@ -43,7 +43,7 @@ clear_cache = CACHE.clear_cache
 
 from functools import lru_cache, wraps
 
-def __cacheit(maxsize):
+def __cacheit(maxsize, *, by_identity=False):
     """caching decorator.
 
         important: the result of cached function must be *immutable*
@@ -65,17 +65,35 @@ def __cacheit(maxsize):
         set environment variable SYMPY_USE_CACHE to 'debug'
     """
     def func_wrapper(func):
-        cfunc = lru_cache(maxsize, typed=True)(func)
+        if by_identity:
+            @wraps(func)
+            def cached(identity, self, /, *args, **kwargs):
+                return func(self, *args, **kwargs)
+        else:
+            cached = func
+        cfunc = lru_cache(maxsize, typed=True)(cached)
 
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                retval = cfunc(*args, **kwargs)
-            except TypeError as e:
-                if not e.args or not e.args[0].startswith('unhashable type:'):
-                    raise
-                retval = func(*args, **kwargs)
-            return retval
+        if by_identity:
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                if not args:
+                    return func(**kwargs)
+                try:
+                    return cfunc(id(args[0]), *args, **kwargs)
+                except TypeError as e:
+                    if not e.args or not e.args[0].startswith('unhashable type:'):
+                        raise
+                    return func(*args, **kwargs)
+        else:
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                try:
+                    retval = cfunc(*args, **kwargs)
+                except TypeError as e:
+                    if not e.args or not e.args[0].startswith('unhashable type:'):
+                        raise
+                    retval = func(*args, **kwargs)
+                return retval
 
         wrapper.cache_info = cfunc.cache_info
         wrapper.cache_clear = cfunc.cache_clear
@@ -83,6 +101,8 @@ def __cacheit(maxsize):
         CACHE.append(wrapper)
         return wrapper
 
+    if not by_identity:
+        func_wrapper._by_identity = __cacheit(maxsize, by_identity=True)
     return func_wrapper
 ########################################
 
@@ -155,6 +175,9 @@ else:
 
 def cacheit_by_identity(func):
     """Cache a method separately for each instance, using cacheit's policies."""
+    identity_cache = getattr(cacheit, '_by_identity', None)
+    if identity_cache is not None:
+        return identity_cache(func)
     @cacheit
     @wraps(func)
     def cached(identity, self, /, *args, **kwargs):
