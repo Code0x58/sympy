@@ -110,6 +110,8 @@ def _args_equal(left, right):
                 if a_builtin != b_builtin:
                     return False
                 if a_builtin:
+                    if container.__len__(a) != container.__len__(b):
+                        return False
                     if container is tuple:
                         if not _args_equal(tuple(tuple.__iter__(a)), tuple(tuple.__iter__(b))):
                             return False
@@ -565,6 +567,10 @@ class Basic(Printable):
                     elif container is tuple:
                         c = _compare_tuple_args(l, r)
                     else:
+                        # Argument wrapping preserves cardinality.
+                        l_size, r_size = frozenset.__len__(l), frozenset.__len__(r)
+                        if l_size != r_size:
+                            return (l_size > r_size) - (l_size < r_size)
                         # Wrapping entries gives native and class fields the same rules.
                         l, r = _frozenset_args(l), _frozenset_args(r)
                         if l == r:

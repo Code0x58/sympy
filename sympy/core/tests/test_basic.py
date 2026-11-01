@@ -258,7 +258,7 @@ def test_frozenset_custom_equality():
         def __hash__(self):
             return 0
 
-    first, second = Basic(EquivalentSet([1])), Basic(EquivalentSet([2]))
+    first, second = Basic(EquivalentSet([1])), Basic(EquivalentSet([2, 3]))
     assert first == second
     assert hash(first) == hash(second)
     assert first.compare(second) == second.compare(first) == 0

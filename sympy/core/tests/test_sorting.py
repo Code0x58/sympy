@@ -126,6 +126,34 @@ def test_native_argument_sort_key_storage():
     assert first > other and second > other
 
 
+@pytest.mark.parametrize('hide_protocol', [False, True])
+@pytest.mark.parametrize('lower, upper', [
+    (frozenset([None]), frozenset([None, 1])),
+    (frozenset([frozenset([None])]),
+     frozenset([frozenset([None]), frozenset([1])])),
+    (frozenset([x]), frozenset([None, 0])),
+    (frozenset(), frozenset([None, 1])),
+    (frozenset([1]), frozenset([1, 2])),
+])
+def test_frozenset_argument_cardinality(lower, upper, hide_protocol):
+    class StoredSet(frozenset):
+        def __iter__(self):
+            return iter(())
+
+        def __len__(self):
+            return 0
+
+    container = StoredSet if hide_protocol else frozenset
+    first, second = Basic(container(lower)), Basic(container(upper))
+    assert first != second
+    assert first.compare(second) == -1
+    assert second.compare(first) == 1
+    left, right = default_sort_key(first), default_sort_key(second)
+    assert left < right and not right < left
+    for values in ([first, second], [second, first]):
+        assert sorted(values, key=default_sort_key) == [first, second]
+
+
 @pytest.mark.parametrize('base, value', [(complex, 1j), (frozenset, [1]), (tuple, [1])])
 def test_native_argument_sort_key_hooks(base, value):
     class Tagged(base):
