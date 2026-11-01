@@ -2550,6 +2550,33 @@ class Basic(Printable):
         False
 
         """
+        if approx is None:
+            if a is b:
+                return True
+            a_type, b_type = type(a), type(b)
+            if not a == b or (a_type is not b_type and not _same_class(a_type, b_type)):
+                return False
+            if isinstance(a, Basic):
+                first, second = a.args, b.args
+            elif _has_builtin_equality(a, frozenset):
+                # Align stored members by value without imposing an order.
+                members = {value: value for value in frozenset.__iter__(b)}
+                return all(Basic.is_same(value, members[value])
+                           for value in frozenset.__iter__(a))
+            elif _has_builtin_equality(a, tuple):
+                first, second = tuple(tuple.__iter__(a)), tuple(tuple.__iter__(b))
+            elif isinstance(a, type):
+                return True
+            else:
+                a_iterable, b_iterable = iterable(a), iterable(b)
+                if a_iterable != b_iterable:
+                    return False
+                if not a_iterable:
+                    return True
+                first, second = tuple(a), tuple(b)
+            return len(first) == len(second) and all(
+                Basic.is_same(left, right) for left, right in zip(first, second))
+
         from .numbers import Number
         from .traversal import postorder_traversal as pot
         missing = object()

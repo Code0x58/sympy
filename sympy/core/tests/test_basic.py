@@ -2,7 +2,7 @@
 of Basic or Atom."""
 from __future__ import annotations
 import collections
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from typing import TypeVar, Generic
 
@@ -11,8 +11,8 @@ from sympy.core.basic import (Basic, Atom, as_Basic,
     _atomic, _aresame)
 from sympy.core.cache import clear_cache
 from sympy.core.containers import Tuple
-from sympy.core.function import Function, Lambda
-from sympy.core.numbers import I, pi, Float
+from sympy.core.function import Function, Lambda, Subs
+from sympy.core.numbers import I, pi, Float, equal_valued
 from sympy.core.singleton import S
 from sympy.core.sorting import default_sort_key
 from sympy.core.symbol import symbols, Symbol, Dummy
@@ -77,6 +77,115 @@ def test_replace_equal_native_none():
                 lambda node: replacement, map=True, simultaneous=simultaneous)
             assert result is source
             assert changes == {}
+
+
+def test_is_same_unordered_fields():
+    class Label:
+        def __init__(self, value):
+            self.value = value
+
+        def __hash__(self):
+            return 0
+
+        def __eq__(self, other):
+            return isinstance(other, Label) and self.value == other.value
+
+    for size in (2, 3, 5):
+        first = frozenset(Label(value) for value in range(size))
+        second = frozenset(Label(value) for value in reversed(range(size)))
+        for wrap in (lambda value: value, Basic,
+                     lambda value: Basic((value,)),
+                     lambda value: Basic(frozenset([value]))):
+            left, right = wrap(first), wrap(second)
+            assert Basic.is_same(left, right)
+            assert Basic.is_same(right, left)
+            if isinstance(left, Basic):
+                for simultaneous in (False, True):
+                    result, changes = left.replace(lambda node: node is left,
+                        lambda node: right, map=True, simultaneous=simultaneous)
+                    assert result is left
+                    assert changes == {}
+
+
+def test_is_same_unordered_member_structure():
+    x, y, z = symbols('x y z')
+    f = Function('f')
+    first, second = Subs(f(x), x, 0), Subs(f(y), y, 0)
+    for wrap in (Basic, lambda value: Basic((value,))):
+        left = wrap(frozenset([first, z]))
+        right = wrap(frozenset([z, second]))
+        assert left == right
+        assert not Basic.is_same(left, right)
+        result, changes = left.replace(lambda node: node is left,
+            lambda node: right, map=True)
+        assert result is right
+        assert changes[left] is right
+
+
+def test_is_same_unordered_member_types():
+    for first, second in ((1, 1.0), (1, True), (1, S.One), (S.One, Float(1))):
+        for wrap in (lambda value: value, Basic):
+            left, right = [wrap(frozenset([value])) for value in (first, second)]
+            assert not Basic.is_same(left, right)
+            assert not Basic.is_same(right, left)
+
+
+def test_is_same_container_storage():
+    for base in (tuple, frozenset):
+        class Stored(base):
+            def __iter__(self):
+                raise AssertionError('stored members must be used')
+
+            def __len__(self):
+                raise AssertionError('stored cardinality must be used')
+
+        for wrap in (lambda value: value, Basic):
+            left, right = wrap(Stored([1, 2])), wrap(Stored([1, 2]))
+            assert Basic.is_same(left, right)
+
+
+def test_is_same_shared_native_nan():
+    for value in (float('nan'), complex(float('nan'), 0), Decimal('NaN'), Decimal('sNaN')):
+        assert Basic.is_same(value, value)
+        assert Basic.is_same(Basic(value), Basic(value))
+    assert not Basic.is_same(float('nan'), float('nan'))
+    with raises(InvalidOperation):
+        Basic.is_same(Decimal('sNaN'), Decimal('sNaN'))
+
+
+def test_is_same_numeric_approximation():
+    first, second = Basic(S.Half), Basic(Float(0.5))
+    assert Basic.is_same(first, second, equal_valued)
+    assert not Basic.is_same(S.One, S.One, lambda left, right: False)
+
+
+def test_is_same_aliased_tree_shapes():
+    class First(Basic):
+        def __eq__(self, other):
+            return isinstance(other, First)
+
+    class Second(Basic):
+        def __eq__(self, other):
+            return isinstance(other, Second)
+
+    left, right = First(Second(), First()), First(Second(First()))
+    assert left == right
+    assert not Basic.is_same(left, right)
+    assert not Basic.is_same(right, left)
+    left, right = First(First(), First()), First(First(First()))
+    assert left == right
+    assert not Basic.is_same(left, right)
+    assert not Basic.is_same(right, left)
+    for base in (tuple, list):
+        class Sequence(base):
+            def __eq__(self, other):
+                return type(self) is type(other)
+
+        left = Sequence((Second(), Sequence(())))
+        right = Sequence((Second(Sequence(())),))
+        assert left == right
+        assert not Basic.is_same(left, right)
+        assert not Basic.is_same(right, left)
 
 
 def test_structure():
