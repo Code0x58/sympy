@@ -95,10 +95,92 @@ def _compare_tuple_args(left, right):
         elif isinstance(b, Basic):
             c = -b.compare(a)
         else:
-            c = Basic(a).compare(Basic(b))
+            c = _compare_args((a,), (b,))
         if c:
             return c
     return (tuple.__len__(left) > tuple.__len__(right)) - (tuple.__len__(left) < tuple.__len__(right))
+
+
+def _compare_args(left, right):
+    """Compare argument sequences with Basic's scalar and container order."""
+    len_left = len(left)
+    len_right = len(right)
+    c = (len_left > len_right) - (len_left < len_right)
+    if c:
+        return c
+    for l, r in zip(left, right):
+        if l is r:
+            continue
+        if isinstance(l, Basic):
+            c = l.compare(r)
+        elif isinstance(r, Basic):
+            c = -r.compare(l)
+        elif isinstance(l, type) or isinstance(r, type):
+            # Class-valued fields follow other fields consistently.
+            if not isinstance(l, type):
+                c = -1
+            elif not isinstance(r, type):
+                c = 1
+            elif l == r:
+                c = 0
+            else:
+                lk, rk = default_sort_key(l), default_sort_key(r)
+                c = bool(lk > rk) - bool(lk < rk)
+        elif type(l) is tuple and type(r) is tuple:
+            c = _compare_tuple_args(l, r)
+        else:
+            l_set_builtin = _has_builtin_equality(l, frozenset)
+            r_set_builtin = _has_builtin_equality(r, frozenset)
+            if not (l_set_builtin or r_set_builtin
+                    or _has_builtin_equality(l, tuple) or _has_builtin_equality(r, tuple)) and l == r:
+                c = 0
+            elif (isinstance(l, frozenset) or isinstance(r, frozenset)
+                    or isinstance(l, tuple) and isinstance(r, tuple)):
+                container = (frozenset if isinstance(l, frozenset) or isinstance(r, frozenset)
+                             else tuple)
+                l_builtin = (l_set_builtin if container is frozenset
+                             else _has_builtin_equality(l, container))
+                r_builtin = (r_set_builtin if container is frozenset
+                             else _has_builtin_equality(r, container))
+                if l_builtin != r_builtin:
+                    c = -1 if l_builtin else 1
+                elif not l_builtin:
+                    # Custom equality can equate containers with other native types.
+                    c = bool(l > r) - bool(l < r)
+                    if not c:
+                        raise TypeError(f"Cannot order {container.__name__} fields with custom equality")
+                elif container is tuple:
+                    c = _compare_tuple_args(l, r)
+                else:
+                    # Argument wrapping preserves cardinality.
+                    l_size, r_size = frozenset.__len__(l), frozenset.__len__(r)
+                    if l_size != r_size:
+                        return (l_size > r_size) - (l_size < r_size)
+                    if l_size <= 1:
+                        # No member hashes are needed; equality still takes precedence.
+                        l, r = tuple(frozenset.__iter__(l)), tuple(frozenset.__iter__(r))
+                        c = 0 if _args_equal(l, r) else _compare_args(l, r)
+                    else:
+                        # Wrapping entries gives native and class fields the same rules.
+                        l, r = _frozenset_args(l), _frozenset_args(r)
+                        if l == r:
+                            c = 0
+                        else:
+                            l, r = sorted(l, key=_args_sortkey), sorted(r, key=_args_sortkey)
+                            c = _compare_args(l, r)
+            # NaNs must not acquire an order through their components.
+            elif ((type(l) is complex or type(r) is complex)
+                    and _is_standard_number(l) and _is_standard_number(r)
+                    and l == l and r == r):
+                l, r = (l.real, l.imag), (r.real, r.imag)
+                c = (l > r) - (l < r)
+            else:
+                c = bool(l > r) - bool(l < r)
+                if not c and _has_builtin_equality(l, tuple) != _has_builtin_equality(r, tuple):
+                    raise TypeError("Cannot order tuple fields with custom equality")
+        if c:
+            return c
+    return 0
 
 
 def _args_equal(left, right):
@@ -125,10 +207,11 @@ def _args_equal(left, right):
                 if a_builtin != b_builtin:
                     return False
                 if a_builtin:
-                    if container.__len__(a) != container.__len__(b):
+                    size = container.__len__(a)
+                    if size != container.__len__(b):
                         return False
-                    if container is tuple:
-                        if not _args_equal(tuple(tuple.__iter__(a)), tuple(tuple.__iter__(b))):
+                    if container is tuple or size <= 1:
+                        if not _args_equal(tuple(container.__iter__(a)), tuple(container.__iter__(b))):
                             return False
                     elif _frozenset_args(a) != _frozenset_args(b):
                         return False
@@ -535,81 +618,7 @@ class Basic(Printable):
             if c:
                 return c
         #
-        st = self._hashable_content()
-        ot = other._hashable_content()
-        len_st = len(st)
-        len_ot = len(ot)
-        c = (len_st > len_ot) - (len_st < len_ot)
-        if c:
-            return c
-        for l, r in zip(st, ot):
-            if l is r:
-                continue
-            if isinstance(l, Basic):
-                c = l.compare(r)
-            elif isinstance(r, Basic):
-                c = -r.compare(l)
-            elif isinstance(l, type) or isinstance(r, type):
-                # Class-valued fields follow other fields consistently.
-                if not isinstance(l, type):
-                    c = -1
-                elif not isinstance(r, type):
-                    c = 1
-                elif l == r:
-                    c = 0
-                else:
-                    lk, rk = default_sort_key(l), default_sort_key(r)
-                    c = bool(lk > rk) - bool(lk < rk)
-            elif type(l) is tuple and type(r) is tuple:
-                c = _compare_tuple_args(l, r)
-            else:
-                l_set_builtin = _has_builtin_equality(l, frozenset)
-                r_set_builtin = _has_builtin_equality(r, frozenset)
-                if not (l_set_builtin or r_set_builtin
-                        or _has_builtin_equality(l, tuple) or _has_builtin_equality(r, tuple)) and l == r:
-                    c = 0
-                elif (isinstance(l, frozenset) or isinstance(r, frozenset)
-                        or isinstance(l, tuple) and isinstance(r, tuple)):
-                    container = (frozenset if isinstance(l, frozenset) or isinstance(r, frozenset)
-                                 else tuple)
-                    l_builtin = (l_set_builtin if container is frozenset
-                                 else _has_builtin_equality(l, container))
-                    r_builtin = (r_set_builtin if container is frozenset
-                                 else _has_builtin_equality(r, container))
-                    if l_builtin != r_builtin:
-                        c = -1 if l_builtin else 1
-                    elif not l_builtin:
-                        # Custom equality can equate containers with other native types.
-                        c = bool(l > r) - bool(l < r)
-                        if not c:
-                            raise TypeError(f"Cannot order {container.__name__} fields with custom equality")
-                    elif container is tuple:
-                        c = _compare_tuple_args(l, r)
-                    else:
-                        # Argument wrapping preserves cardinality.
-                        l_size, r_size = frozenset.__len__(l), frozenset.__len__(r)
-                        if l_size != r_size:
-                            return (l_size > r_size) - (l_size < r_size)
-                        # Wrapping entries gives native and class fields the same rules.
-                        l, r = _frozenset_args(l), _frozenset_args(r)
-                        if l == r:
-                            c = 0
-                        else:
-                            l, r = sorted(l, key=_args_sortkey), sorted(r, key=_args_sortkey)
-                            c = Basic(*l).compare(Basic(*r))
-                # NaNs must not acquire an order through their components.
-                elif ((type(l) is complex or type(r) is complex)
-                        and _is_standard_number(l) and _is_standard_number(r)
-                        and l == l and r == r):
-                    l, r = (l.real, l.imag), (r.real, r.imag)
-                    c = (l > r) - (l < r)
-                else:
-                    c = bool(l > r) - bool(l < r)
-                    if not c and _has_builtin_equality(l, tuple) != _has_builtin_equality(r, tuple):
-                        raise TypeError("Cannot order tuple fields with custom equality")
-            if c:
-                return c
-        return 0
+        return _compare_args(self._hashable_content(), other._hashable_content())
 
     @classmethod
     def fromiter(cls, args, **assumptions):
@@ -2578,7 +2587,7 @@ class _NativeSortKey:
         # Exact tuple fields share Basic's tuple ordering.
         if type(self._content[0]) is tuple and type(content[0]) is tuple:
             return _compare_tuple_args(self._content[0], content[0])
-        return Basic(*self._content).compare(Basic(*content))
+        return _compare_args(self._content, content)
 
     def __lt__(self, other):
         return self._compare(other) < 0

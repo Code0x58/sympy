@@ -169,6 +169,48 @@ def test_frozenset_argument_kinds():
             assert first.compare(second) == -second.compare(first) != 0
 
 
+def test_frozenset_identity_after_equal_query():
+    native, symbolic = frozenset([1]), frozenset([S.One])
+    assert native == symbolic and hash(native) == hash(symbolic)
+    for left, right in ((native, symbolic), (symbolic, native)):
+        clear_cache()
+        first, second = Basic(left), Basic(right)
+        assert first == Basic(frozenset(list(left)))
+        assert second == Basic(frozenset(list(right)))
+        assert first != second
+        assert first.compare(second) == -second.compare(first) != 0
+        assert default_sort_key(first) != default_sort_key(second)
+
+
+def test_frozenset_comparison_without_container_hash():
+    class StoredSet(frozenset):
+        def __hash__(self):
+            raise RuntimeError('container hashing is unavailable')
+
+    first = Basic(StoredSet([1]))
+    equivalent = Basic(frozenset([1]))
+    other = Basic(frozenset([2]))
+    assert first == equivalent
+    assert first.compare(equivalent) == equivalent.compare(first) == 0
+    assert first.compare(other) == -other.compare(first) == -1
+
+
+def test_singleton_frozenset_equal_members():
+    class Equivalent(Basic):
+        def __eq__(self, other):
+            return isinstance(other, Equivalent)
+
+        def __hash__(self):
+            return 0
+
+    first, second = Equivalent(1), Equivalent(2)
+    assert first == second and first.compare(second) != 0
+    left, right = Basic(frozenset([first])), Basic(frozenset([second]))
+    assert left == right
+    assert left.compare(right) == right.compare(left) == 0
+    assert default_sort_key(left) == default_sort_key(right)
+
+
 def test_frozenset_native_numeric_equivalence():
     for one in (1, True, 1.0, Fraction(1), Decimal(1)):
         for nested in (False, True):
