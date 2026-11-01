@@ -2961,6 +2961,7 @@ class Subs(Expr):
                 and not _is_uninterpreted_function(new) and self._comparison_key[0])):
             if _is_ordinary_symbol(old) and old not in free:
                 def unchanged(arg):
+                    from .power import Pow
                     for node in iterargs(arg):
                         if isinstance(node, type):
                             if node == old:
@@ -2974,7 +2975,12 @@ class Subs(Expr):
                         if node.__class__ == old.__class__ and node == old:
                             return False
                         hook = inspect.getattr_static(node, '_eval_subs', None)
-                        if not (any(hook is method for method in (
+                        if type(node) is Pow and hook is Pow._eval_subs:
+                            from sympy.calculus.accumulationbounds import AccumBounds
+                            # Power substitution can act on an interval or a base alias.
+                            if isinstance(node.exp, AccumBounds) or old == node.base:
+                                return False
+                        elif not (any(hook is method for method in (
                                     Basic._eval_subs, Function._eval_subs, Symbol._eval_subs,
                                     Add._eval_subs, Mul._eval_subs))
                                 or isinstance(node, Number) and _has_standard_atom_hooks(type(node))

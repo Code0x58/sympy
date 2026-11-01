@@ -2614,7 +2614,8 @@ def test_Subs_opaque_expression_class_alias(wrap):
 
 @pytest.mark.parametrize('replacement', [x, Dummy('replacement')])
 @pytest.mark.parametrize('simultaneous', [False, True])
-@pytest.mark.parametrize('wrap', [lambda expr: expr, lambda expr: expr + 1])
+@pytest.mark.parametrize('wrap', [lambda expr: expr, lambda expr: expr + 1,
+                                  lambda expr: expr**2, lambda expr: expr**z])
 def test_Subs_unmatched_symbol_preserves_constructor(wrap, simultaneous, replacement):
     class RejectDummy(Function):
         def __new__(cls, *args, **kwargs):
@@ -2627,21 +2628,24 @@ def test_Subs_unmatched_symbol_preserves_constructor(wrap, simultaneous, replace
 
 
 @pytest.mark.parametrize('simultaneous', [False, True])
-def test_Subs_point_edit_preserves_constructor(simultaneous):
+@pytest.mark.parametrize('wrap', [lambda expr: expr, lambda expr: expr**2,
+                                  lambda expr: expr**z])
+def test_Subs_point_edit_preserves_constructor(simultaneous, wrap):
     class RejectDummy(Function):
         def __new__(cls, *args, **kwargs):
             if any(isinstance(arg, Dummy) for arg in args):
                 raise ValueError('dummy argument rejected')
             return super().__new__(cls, *args, **kwargs)
 
-    expr = RejectDummy(x)
+    expr = wrap(RejectDummy(x))
     source = Subs(expr, x, y)
     result = source.subs(y, x, simultaneous=simultaneous)
     assert result.expr == expr and result.variables == (x,) and result.point == (x,)
 
 
 @pytest.mark.parametrize('replacement', [x, Dummy('replacement')])
-@pytest.mark.parametrize('wrap', [lambda expr: expr, lambda expr: expr + 1])
+@pytest.mark.parametrize('wrap', [lambda expr: expr, lambda expr: expr + 1,
+                                  lambda expr: expr**2, lambda expr: expr**z])
 def test_Subs_unmatched_symbol_keeps_custom_substitution_hook(replacement, wrap):
     class Reacting(Expr):
         def _eval_subs(self, old, new):
@@ -2658,6 +2662,22 @@ def test_Subs_unmatched_symbol_keeps_interval_power_substitution(simultaneous):
     expr = Pow(1, AccumBounds(variable, variable + 1), evaluate=False)
     source = Subs(expr, variable, 0)
     assert source.subs(y, variable, simultaneous=simultaneous).expr == 1
+
+
+def test_Subs_unmatched_symbol_keeps_power_base_alias():
+    class BaseAlias(Symbol):
+        def __eq__(self, other):
+            return isinstance(other, BaseAlias) or type(other) is Symbol and other == y
+
+        def __hash__(self):
+            return hash(y)
+
+        @property
+        def free_symbols(self):
+            return set()
+
+    source = Subs(Pow(BaseAlias('base'), x, evaluate=False), x, 2)
+    assert source.subs(y, x).doit() == x**2
 
 
 def test_Subs_renaming_assumptions():
