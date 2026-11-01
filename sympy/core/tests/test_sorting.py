@@ -235,6 +235,39 @@ def test_tuple_field_partial_order():
             assert keys[a] < keys[b]
 
 
+def test_tuple_field_custom_ordering():
+    class ReverseTuple(tuple):
+        __slots__ = ()
+        __lt__ = tuple.__gt__
+        __gt__ = tuple.__lt__
+
+    values = [Basic(ReverseTuple((value,))) for value in (1, 2, 3)]
+    assert sorted(values, key=default_sort_key) == list(reversed(values))
+    first = default_sort_key(values[0])
+    second = default_sort_key(values[1])
+    assert first > second and second < first
+    assert first >= second and second <= first
+    assert first == default_sort_key(Basic(ReverseTuple((1.0,))))
+    symbolic = default_sort_key(Basic(ReverseTuple((S.One,))))
+    assert first != symbolic
+    assert (first > symbolic) != (first < symbolic)
+
+    class FailingTuple(tuple):
+        __slots__ = ()
+
+        def __lt__(self, other):
+            raise ValueError('tuple ordering failed')
+
+        __gt__ = __lt__
+
+    first, second = Basic(FailingTuple((1,))), Basic(FailingTuple((2,)))
+    assert first.compare(Basic(FailingTuple((1,)))) == 0
+    with raises(ValueError, match='tuple ordering failed'):
+        first.compare(second)
+    with raises(ValueError, match='tuple ordering failed'):
+        assert default_sort_key(first) < default_sort_key(second)
+
+
 def test_native_argument_boolean_comparison():
     class Value:
         def __init__(self, value):

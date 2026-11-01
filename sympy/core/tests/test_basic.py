@@ -546,6 +546,33 @@ def test_tuple_argument_ordering():
         assert default_sort_key(first) < default_sort_key(second)
 
 
+def test_tuple_argument_custom_ordering():
+    class ReverseTuple(tuple):
+        __slots__ = ()
+        __lt__ = tuple.__gt__
+        __gt__ = tuple.__lt__
+
+    class StoredTuple(ReverseTuple):
+        __slots__ = ()
+
+        def __iter__(self):
+            raise AssertionError('stored tuple contents must be used')
+
+        __len__ = __iter__
+
+    for cls in (ReverseTuple, StoredTuple):
+        for wrap in (lambda value: value, lambda value: (value,)):
+            first, second = [Basic(wrap(cls((value,)))) for value in (1, 2)]
+            assert first.compare(second) == 1
+            assert second.compare(first) == -1
+            equivalent = Basic(wrap(cls((1.0,))))
+            assert first == equivalent
+            assert first.compare(equivalent) == 0
+            symbolic = Basic(wrap(cls((S.One,))))
+            assert first != symbolic
+            assert first.compare(symbolic) == -symbolic.compare(first) != 0
+
+
 def test_frozenset_argument_storage():
     class StoredSet(frozenset):
         def __iter__(self):

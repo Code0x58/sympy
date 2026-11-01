@@ -150,7 +150,15 @@ def _compare_args(left, right):
                     if not c:
                         raise TypeError(f"Cannot order {container.__name__} fields with custom equality")
                 elif container is tuple:
-                    c = _compare_tuple_args(l, r)
+                    c = 0
+                    if any(_get_type_attribute(value, name) is not getattr(tuple, name)
+                           for value in (l, r) for name in ('__lt__', '__gt__')):
+                        if _args_equal(tuple(tuple.__iter__(l)), tuple(tuple.__iter__(r))):
+                            continue
+                        c = bool(l > r) - bool(l < r)
+                    if not c:
+                        # Argument identity can distinguish native ordering ties.
+                        c = _compare_tuple_args(l, r)
                 else:
                     # Argument wrapping preserves cardinality.
                     l_size, r_size = frozenset.__len__(l), frozenset.__len__(r)
