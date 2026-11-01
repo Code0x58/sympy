@@ -46,6 +46,18 @@ def _is_standard_number(value):
             or cls is Decimal or cls is Fraction)
 
 
+def _same_class(left, right):
+    """Recognize one class or equivalent undefined-function factories."""
+    if left is right:
+        return True
+    if not left == right:
+        return False
+    from .function import UndefinedFunction
+    return (isinstance(left, UndefinedFunction)
+            and all(type.__dict__['__dict__'].__get__(cls).get('_is_factory') is True
+                    for cls in (left, right)))
+
+
 def _get_type_attribute(value, name, default=None):
     """Look up a type attribute without invoking metaclass lookup hooks."""
     missing = object()
@@ -95,7 +107,7 @@ def _args_equal(left, right):
             continue
         if isinstance(a, Basic):
             if not isinstance(b, Basic) or ((a.is_Number or b.is_Number)
-                    and type(a) != type(b)):
+                    and type(a) is not type(b)):
                 return False
         elif isinstance(b, Basic) or isinstance(a, type) != isinstance(b, type):
             return False
@@ -510,9 +522,13 @@ class Basic(Printable):
         c = _cmp_name(n1, n2)
         if c:
             return c
-        if n1 is not n2 and n1 != n2:
+        if n1 is not n2 and not _same_class(n1, n2):
             lk, rk = default_sort_key(n1), default_sort_key(n2)
             c = bool(lk > rk) - bool(lk < rk)
+            if not c:
+                from .function import _class_order_key
+                lk, rk = _class_order_key(n1), _class_order_key(n2)
+                c = (lk > rk) - (lk < rk)
             if c:
                 return c
         #
@@ -700,8 +716,9 @@ class Basic(Printable):
             return self._do_eq_sympify(other)
 
         # check for pure number expr
-        if  not (self.is_Number and other.is_Number) and (
-                type(self) != type(other)):
+        self_type, other_type = type(self), type(other)
+        if (self_type is not other_type and not (self.is_Number and other.is_Number)
+                and not _same_class(self_type, other_type)):
             return False
         return _args_equal(self._hashable_content(), other._hashable_content())
 

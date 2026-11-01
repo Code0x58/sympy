@@ -2480,19 +2480,13 @@ def test_Subs_constructor_postprocessor_identity(kind):
 @pytest.mark.parametrize('reverse', [False, True])
 @pytest.mark.thread_unsafe(reason='changes constructor postprocessors')
 def test_constructor_class_alias_postprocessors(base, reverse):
-    class Strict(base):
-        def __eq__(self, other):
-            return type(self) is type(other) and self.args == other.args
-
-        __hash__ = Basic.__hash__
-
-    class FirstBase(Strict):
+    class FirstBase(base):
         pass
 
-    class SecondBase(Strict):
+    class SecondBase(base):
         pass
 
-    metaclass = _primitive_alias_metaclass(Strict)
+    metaclass = _primitive_alias_metaclass(base)
     first = metaclass('Alias', (FirstBase,), {})
     second = metaclass('Alias', (SecondBase,), {})
     assert first == second and hash(first) == hash(second)
@@ -2515,21 +2509,53 @@ def test_constructor_class_alias_postprocessors(base, reverse):
 
 @pytest.mark.parametrize('reverse', [False, True])
 def test_application_class_alias_construction(reverse):
-    class Strict(Application):
-        def __eq__(self, other):
-            return type(self) is type(other) and self.args == other.args
-
-        __hash__ = Basic.__hash__
-
-    metaclass = _primitive_alias_metaclass(Strict)
-    first = metaclass('Alias', (Strict,), {})
-    second = metaclass('Alias', (Strict,), {})
+    metaclass = _primitive_alias_metaclass(Application)
+    first = metaclass('Alias', (Application,), {})
+    second = metaclass('Alias', (Application,), {})
     assert first == second and hash(first) == hash(second)
     clear_cache()
     for cls in (second, first) if reverse else (first, second):
         value = cls(x)
         assert value.func is cls and value.args == (x,)
     assert first(x) != second(x)
+
+
+@pytest.mark.parametrize('metaclass', [type(Function), UndefinedFunction])
+@pytest.mark.parametrize('names', [('Alias', 'Alias'), ('First', 'Second')])
+def test_function_class_alias_instance_identity(metaclass, names):
+    class AliasMeta(metaclass):
+        def __eq__(cls, other):
+            return isinstance(other, AliasMeta)
+
+        def __hash__(cls):
+            return 0
+
+    evaluators = (lambda cls, arg: S.One if arg == 0 else None,
+                  lambda cls, arg: S(2) if arg == 0 else None)
+    classes = [AliasMeta(name, (Function,), {'eval': classmethod(evaluate)})
+               for name, evaluate in zip(names, evaluators)]
+    assert classes[0] == classes[1]
+    for order in ((0, 1), (1, 0)):
+        clear_cache()
+        values = [classes[i](x) for i in order]
+        assert all(value.func is classes[i] for value, i in zip(values, order))
+        assert values[0] != values[1]
+        assert values[0].compare(values[1]) == -values[1].compare(values[0]) != 0
+        assert [value.subs(x, 0) for value in values] == [S(i + 1) for i in order]
+        assert (values[0] + values[1]).subs(x, 0) == 3
+
+
+@pytest.mark.parametrize('passive_metaclass', [False, True])
+def test_recreated_factory_instance_identity(passive_metaclass):
+    metaclass = (type('PassiveMeta', (UndefinedFunction,), {})
+                 if passive_metaclass else UndefinedFunction)
+    first = metaclass('factory_alias', value=1)(x)
+    clear_cache()
+    second = metaclass('factory_alias', value=S.One)(x)
+    assert type(first) is not type(second)
+    assert first == second and hash(first) == hash(second)
+    assert Basic.is_same(first, second)
+    assert first.compare(second) == second.compare(first) == 0
 
 
 def test_Subs_scope_mask_preserves_held_expression():

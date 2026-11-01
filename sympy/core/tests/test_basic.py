@@ -639,6 +639,27 @@ def test_equality():
     assert not bar != b
 
 
+def test_class_alias_instance_identity():
+    class AliasMeta(type):
+        def __eq__(cls, other):
+            return isinstance(other, AliasMeta)
+
+        def __hash__(cls):
+            return 0
+
+    for names in (('Alias', 'Alias'), ('First', 'Second')):
+        first, second = [AliasMeta(name, (Basic,), {}) for name in names]
+        assert first == second and hash(first) == hash(second)
+        left, right = first(b1), second(b1)
+        assert left != right and Basic(left) != Basic(right)
+        assert len({left, right}) == 2
+        assert left.compare(right) == -right.compare(left) != 0
+        numbers = [AliasMeta(name, (Basic,), {
+            'is_Number': True, '__hash__': lambda self: 0})() for name in names]
+        assert numbers[0] == numbers[1] and hash(numbers[0]) == hash(numbers[1])
+        assert Basic(numbers[0]) != Basic(numbers[1])
+
+
 def test_matches_basic():
     instances = [Basic(b1, b1, b2), Basic(b1, b2, b1), Basic(b2, b1, b1),
                  Basic(b1, b2), Basic(b2, b1), b2, b1]
