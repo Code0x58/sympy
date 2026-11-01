@@ -5,7 +5,7 @@ from collections import Counter
 from collections.abc import Mapping, Iterable
 from decimal import Decimal
 from fractions import Fraction
-from itertools import zip_longest
+from itertools import repeat, zip_longest
 from functools import cmp_to_key
 from typing import TYPE_CHECKING, overload
 
@@ -223,6 +223,114 @@ def _args_equal(left, right):
         if not a == b:
             return False
     return True
+
+
+def _same_structure(a, b):
+    """Match child structure iteratively before checking equality data."""
+    if a is b:
+        return True
+    a_type, b_type = type(a), type(b)
+    if a_type is not b_type and not _same_class(a_type, b_type):
+        return False
+    if isinstance(a, Basic):
+        first, second = a.args, b.args
+        if len(first) != len(second):
+            return False
+        if all(left is right for left, right in zip(first, second)):
+            return a_type is Basic or bool(a == b)
+        root_args = first, second
+    else:
+        root_args = None
+    root = a, b
+    pending = [('compare', root)]
+    compared = {}
+    active = set()
+    missing = object()
+    result = True
+    while pending:
+        operation, data = pending.pop()
+        if operation == 'compare':
+            a, b = data
+            if a is b:
+                result = True
+                continue
+            key = id(a), id(b)
+            previous = compared.get(key)
+            if previous is not None:
+                result = previous[2]
+                continue
+            if key in active:
+                raise RecursionError('cyclic structure in is_same')
+            active.add(key)
+            pending.append(('finish', (a, b)))
+            a_type, b_type = type(a), type(b)
+            if data is not root and a_type is not b_type and not _same_class(a_type, b_type):
+                result = False
+                continue
+            check_value = a_type is not Basic
+            if isinstance(a, Basic):
+                first, second = root_args if data is root else (a.args, b.args)
+            elif _has_builtin_equality(a, frozenset):
+                if frozenset.__len__(a) != frozenset.__len__(b):
+                    result = False
+                    continue
+                # Hash buckets align candidates without deep equality calls.
+                members = {}
+                for value in frozenset.__iter__(b):
+                    members.setdefault(hash(value), []).append(value)
+                groups = [(value, members.get(hash(value), ()))
+                          for value in frozenset.__iter__(a)]
+                pending.append(('all', iter(
+                    ('any', zip(repeat(value), candidates))
+                    for value, candidates in groups)))
+                result = True
+                continue
+            elif _has_builtin_equality(a, tuple):
+                first, second = tuple(tuple.__iter__(a)), tuple(tuple.__iter__(b))
+                check_value = False
+            elif isinstance(a, type):
+                first = second = ()
+            else:
+                a_iterable, b_iterable = iterable(a), iterable(b)
+                if a_iterable != b_iterable:
+                    result = False
+                    continue
+                first, second = (tuple(a), tuple(b)) if a_iterable else ((), ())
+            if len(first) != len(second):
+                result = False
+                continue
+            # Exact Basic and built-in tuples have no additional equality data.
+            if all(left is right for left, right in zip(first, second)):
+                result = not check_value or bool(a == b)
+                continue
+            if check_value:
+                pending.append(('value', (a, b)))
+            pending.append(('all', iter(
+                ('compare', pair) for pair in zip(first, second))))
+            result = True
+        elif operation == 'value':
+            if result:
+                result = bool(data[0] == data[1])
+        elif operation == 'finish':
+            a, b = data
+            key = id(a), id(b)
+            active.remove(key)
+            # Keep nodes alive while their identities index this comparison.
+            compared[key] = a, b, result
+        elif operation == 'all':
+            if result:
+                task = next(data, missing)
+                if task is not missing:
+                    pending.append(('all', data))
+                    pending.append(task)
+                    # A candidate search starts unmatched.
+                    result = task[0] != 'any'
+        elif operation == 'any' and not result:
+            pair = next(data, missing)
+            if pair is not missing:
+                pending.append(('any', data))
+                pending.append(('compare', pair))
+    return result
 
 
 def _iterable_args(args):
@@ -2551,31 +2659,7 @@ class Basic(Printable):
 
         """
         if approx is None:
-            if a is b:
-                return True
-            a_type, b_type = type(a), type(b)
-            if not a == b or (a_type is not b_type and not _same_class(a_type, b_type)):
-                return False
-            if isinstance(a, Basic):
-                first, second = a.args, b.args
-            elif _has_builtin_equality(a, frozenset):
-                # Align stored members by value without imposing an order.
-                members = {value: value for value in frozenset.__iter__(b)}
-                return all(Basic.is_same(value, members[value])
-                           for value in frozenset.__iter__(a))
-            elif _has_builtin_equality(a, tuple):
-                first, second = tuple(tuple.__iter__(a)), tuple(tuple.__iter__(b))
-            elif isinstance(a, type):
-                return True
-            else:
-                a_iterable, b_iterable = iterable(a), iterable(b)
-                if a_iterable != b_iterable:
-                    return False
-                if not a_iterable:
-                    return True
-                first, second = tuple(a), tuple(b)
-            return len(first) == len(second) and all(
-                Basic.is_same(left, right) for left, right in zip(first, second))
+            return _same_structure(a, b)
 
         from .numbers import Number
         from .traversal import postorder_traversal as pot

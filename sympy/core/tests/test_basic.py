@@ -188,6 +188,89 @@ def test_is_same_aliased_tree_shapes():
         assert not Basic.is_same(right, left)
 
 
+def test_is_same_deep_unequal_trees():
+    left, right = symbols('deep_left deep_right')
+    for _ in range(500):
+        left, right = Basic(left), Basic(right)
+    for wrap in (lambda value: value, lambda value: (value,),
+                 lambda value: Basic(None, value)):
+        assert not Basic.is_same(wrap(left), wrap(right))
+        assert not Basic.is_same(wrap(right), wrap(left))
+
+
+def test_is_same_metadata_after_children():
+    class Metadata(Basic):
+        def __eq__(self, other):
+            raise ValueError('metadata comparison failed')
+
+    x, y = symbols('x y')
+    assert not Basic.is_same(Metadata(x), Metadata(y))
+    with raises(ValueError, match='metadata comparison failed'):
+        Basic.is_same(Metadata(x), Metadata(x))
+
+    class EndingValue:
+        def __eq__(self, other):
+            raise StopIteration('equality failed')
+
+    with raises(StopIteration, match='equality failed'):
+        Basic.is_same(EndingValue(), EndingValue())
+
+
+def test_is_same_deep_frozensets():
+    for left, right, expected in ((-1, -2, False), (S.One, S.One, True)):
+        for _ in range(500):
+            left, right = frozenset([left]), frozenset([right])
+        assert Basic.is_same(left, right) is expected
+
+
+def test_is_same_shared_subtrees():
+    class Leaf(Basic):
+        calls = 0
+
+        def __eq__(self, other):
+            type(self).calls += 1
+            return isinstance(other, Leaf) and self.args == other.args
+
+    left, right = Leaf(S.One), Leaf(S.One)
+    for _ in range(10):
+        left, right = Basic(left, left), Basic(right, right)
+    assert Basic.is_same(left, right)
+    assert Leaf.calls < 20
+
+
+def test_is_same_comparison_cache_lifetime():
+    left, right = [1], [1]
+    assert Basic.is_same(left, right)
+    right[0] = 2
+    assert not Basic.is_same(left, right)
+    right[0] = 1
+    assert Basic.is_same(left, right)
+
+
+def test_is_same_argument_snapshot():
+    class Node(Basic):
+        reads = 0
+
+        @property
+        def args(self):
+            self.reads += 1
+            return super().args
+
+    x, y = symbols('x y')
+    left, right = Node(x), Node(y)
+    assert not Basic.is_same(left, right)
+    assert left.reads == right.reads == 1
+
+
+def test_is_same_cycles():
+    left, right = [], []
+    left.append(left)
+    right.append(right)
+    assert Basic.is_same(left, left)
+    with raises(RecursionError):
+        Basic.is_same(left, right)
+
+
 def test_structure():
     assert b21.args == (b2, b1)
     assert b21.func(*b21.args) == b21
