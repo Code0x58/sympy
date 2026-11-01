@@ -1158,8 +1158,11 @@ class UndefinedFunction(FunctionClass):
 
     def __new__(mcl, name, bases=(AppliedUndef,), __dict__=None, **kwargs) -> type[AppliedUndef]:
         from .symbol import _filter_assumptions
+        if isinstance(__dict__, dict) and type(__dict__) is not dict:
+            __dict__ = dict.copy(__dict__)
         # Only factory functions have identity determined by name and options.
-        is_factory = (bases == (AppliedUndef,) and not __dict__
+        is_factory = (isinstance(bases, tuple) and tuple.__len__(bases) == 1
+                      and tuple.__getitem__(bases, 0) is AppliedUndef and not __dict__
                       and not _has_function_behavior(kwargs))
         # Allow Function('f', real=True)
         # and/or Function(Symbol('f', real=True))

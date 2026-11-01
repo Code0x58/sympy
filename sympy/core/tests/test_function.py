@@ -15,7 +15,7 @@ from sympy.core.cache import clear_cache
 from sympy.core.containers import Dict, Tuple
 from sympy.core.expr import AtomicExpr, Expr, unchanged
 from sympy.core.function import (Subs, Function, diff, Lambda, expand,
-    nfloat, Derivative, UndefinedFunction)
+    nfloat, Derivative, UndefinedFunction, AppliedUndef)
 from sympy.core.mul import Mul
 from sympy.core.numbers import E, Float, Integer, zoo, Rational, pi, I, oo, nan
 from sympy.core.power import Pow
@@ -1256,6 +1256,38 @@ def test_function_empty_namespace_constructor():
     assert ordinary(x) == empty(x) == omitted(x)
 
 
+@pytest.mark.parametrize('constructor', [Function, UndefinedFunction])
+@pytest.mark.parametrize('has_method', [False, True])
+@pytest.mark.parametrize('hook', ['truth', 'length', 'index', 'iteration'])
+def test_function_namespace_dict_subclass(constructor, has_method, hook):
+    def doit(self, **hints):
+        return S.One
+
+    hooks = {
+        'truth': {'__bool__': lambda self: not has_method},
+        'length': {'__len__': lambda self: int(not has_method)},
+        'index': {'__getitem__': lambda self, key: S.Zero},
+        'iteration': {'__iter__': lambda self: iter(()), 'keys': lambda self: []},
+    }
+    Namespace = type('Namespace', (dict,), hooks[hook])
+    namespace = Namespace({'doit': doit} if has_method else {})
+    reference = type('NamespaceReference', (Function,), namespace)
+    has_evaluator = reference.doit is doit
+    ordinary = Function('namespace_dict_subclass')
+    function = constructor('namespace_dict_subclass', __dict__=namespace)
+    assert (function == ordinary) == (not has_evaluator)
+    for functions in ((ordinary, function), (function, ordinary)):
+        clear_cache()
+        for selected in functions:
+            value = selected(x)
+            if selected is function and has_evaluator:
+                assert value.func is function
+                assert value.doit() is S.One
+            else:
+                assert value.func == selected
+                assert value.doit() == value
+
+
 @pytest.mark.parametrize('namespace', [None, {}, {'tag': 'namespace'}])
 def test_function_namespace_metadata_types(namespace):
     clear_cache()
@@ -1281,6 +1313,68 @@ def test_function_explicit_base_identity(positional, values):
     for function, base in zip(derived, bases):
         assert function.__bases__ == (base,)
         assert function.__bases__[0] is base
+
+
+@pytest.mark.parametrize('positional', [False, True])
+def test_function_explicit_base_class_equality(positional):
+    class Meta(UndefinedFunction):
+        def __eq__(cls, other):
+            if cls.__dict__.get('_base_alias', False):
+                return (other is AppliedUndef or isinstance(other, UndefinedFunction)
+                        and other.__dict__.get('_base_alias', False))
+            return super().__eq__(other)
+
+        def __hash__(cls):
+            if cls.__dict__.get('_base_alias', False):
+                return hash(AppliedUndef)
+            return super().__hash__()
+
+    base = Meta('AliasBase', (AppliedUndef,), {
+        '_base_alias': True, 'doit': lambda self, **hints: S.One})
+    assert base == AppliedUndef and AppliedUndef == base
+    assert hash(base) == hash(AppliedUndef)
+    ordinary = Meta('explicit_base_alias')
+    derived = (Meta('explicit_base_alias', (base,)) if positional else
+               Meta('explicit_base_alias', bases=(base,)))
+    assert derived.__bases__[0] is base
+    assert ordinary != derived
+    for functions in ((ordinary, derived), (derived, ordinary)):
+        clear_cache()
+        for function in functions:
+            value = function(x)
+            assert value.func is function
+            assert value.doit() == (S.One if function is derived else value)
+
+
+@pytest.mark.parametrize('default_base', [False, True])
+@pytest.mark.parametrize('hook', ['equality', 'index', 'iteration', 'length'])
+def test_function_explicit_base_tuple_subclass(default_base, hook):
+    class Base(Function):
+        def doit(self, **hints):
+            return S.One
+
+    replacement = Base if default_base else AppliedUndef
+    hooks = {
+        'equality': {'__eq__': lambda self, other: (AppliedUndef,) == other,
+                     '__hash__': lambda self: hash((AppliedUndef,))},
+        'index': {'__getitem__': lambda self, index: replacement},
+        'iteration': {'__iter__': lambda self: iter((replacement,))},
+        'length': {'__len__': lambda self: 0},
+    }
+    Bases = type('Bases', (tuple,), hooks[hook])
+    base = AppliedUndef if default_base else Base
+    ordinary = Function('explicit_base_tuple')
+    derived = Function('explicit_base_tuple', bases=Bases((base,)))
+    assert derived.__mro__[1] is base
+    assert (ordinary == derived) == default_base
+    for functions in ((ordinary, derived), (derived, ordinary)):
+        clear_cache()
+        for function in functions:
+            value = function(x)
+            assert value.func == function
+            if not default_base:
+                assert value.func is function
+            assert value.doit() == (S.One if function is derived and not default_base else value)
 
 
 @pytest.mark.parametrize('constructor', [Function, UndefinedFunction])
