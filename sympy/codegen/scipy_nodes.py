@@ -54,12 +54,15 @@ class powm1(Function):
     """
     nargs = 2
 
+    def _eval_derivative(self, s):
+        return Pow(*self.args).diff(s)
+
     def fdiff(self, argindex=1):
         """
         Returns the first derivative of this function.
         """
         if argindex == 1:
-            return Pow(self.args[0], self.args[1])*self.args[1]/self.args[0]
+            return self.args[1]*Pow(self.args[0], self.args[1] - 1)
         elif argindex == 2:
             return log(self.args[0])*Pow(*self.args)
         else:

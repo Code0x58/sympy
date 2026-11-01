@@ -322,7 +322,7 @@ def test_eval_partial_derivative_expr_by_symbol():
     tau, alpha = symbols("tau alpha")
 
     expr1 = PartialDerivative(tau**alpha, tau)
-    assert expr1._perform_derivative() == alpha * 1 / tau * tau ** alpha
+    assert expr1._perform_derivative() == alpha*tau**(alpha - 1)
 
     expr2 = PartialDerivative(2*tau + 3*tau**4, tau)
     assert expr2._perform_derivative() == 2 + 12 * tau ** 3
@@ -336,7 +336,7 @@ def test_eval_partial_derivative_single_tensors_by_scalar():
     tau, mu = symbols("tau mu")
 
     expr = PartialDerivative(tau**mu, tau)
-    assert expr._perform_derivative() == mu*tau**mu/tau
+    assert expr._perform_derivative() == mu*tau**(mu - 1)
 
     expr1a = PartialDerivative(A(i), tau)
     assert expr1a._perform_derivative() == 0
@@ -448,7 +448,7 @@ def test_eval_partial_derivative_expr1():
     assert (vector_derivative.contract_metric(L.metric).contract_delta(L.delta) -
         (tau**alpha*L.delta(j, -k) + A(L_0)*A(-L_0)*L.delta(j, -k) + H(-k, j) + 2*A(j)*A(-k))).expand().doit() == 0
 
-    assert scalar_derivative - alpha*1/tau*tau**alpha*A(j) == 0
+    assert scalar_derivative - alpha*tau**(alpha - 1)*A(j) == 0
 
 
 def test_eval_partial_derivative_mixed_scalar_tensor_expr2():

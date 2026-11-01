@@ -11,12 +11,13 @@ instances in other classes for using them it is better to keep it here as separa
 from __future__ import annotations
 from collections import Counter
 from sympy.core import Add, S
-from sympy.core.function import diff, expand, _mexpand, expand_mul
+from sympy.core.function import expand, _mexpand, expand_mul
 from sympy.core.relational import Eq
 from sympy.core.sorting import default_sort_key
 from sympy.core.symbol import Dummy, Wild
 from sympy.functions import exp, cos, cosh, im, log, re, sin, sinh, \
     atan2, conjugate
+from sympy.functions.combinatorial.factorials import ff
 from sympy.integrals import Integral
 from sympy.polys import (Poly, RootOf, rootof, roots)
 from sympy.simplify import collect, simplify, separatevars, powsimp, trigsimp # type: ignore
@@ -73,7 +74,7 @@ def _get_euler_characteristic_eq_sols(eq, func, match_obj):
 
     for i in match_obj:
         if i >= 0:
-            chareq += (match_obj[i]*diff(x**symbol, x, i)*x**-symbol).expand()
+            chareq += (match_obj[i]*ff(symbol, i)/x**i).expand()
 
     chareq = Poly(chareq, symbol)
     chareqroots = [rootof(chareq, k) for k in range(chareq.degree())]

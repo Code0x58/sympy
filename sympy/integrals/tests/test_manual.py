@@ -1208,8 +1208,8 @@ def test_nested_pow():
     F2 = (c*(a + b*x)**d)**e*(a/b + x)*log(a/b + x)
     assert manualintegrate(f, x) == \
         Piecewise((F1, Ne(b, 0) & Ne(d*e, -1)), (F2, Ne(b, 0)), (x*(a**d*c)**e, True))
-    assert F1.diff(x).equals(f)
-    assert F2.diff(x).subs(d*e, -1).equals(f)
+    assert (F1.diff(x)/f).expand(deep=False).powsimp().simplify() == 1
+    assert (F2.diff(x).subs(d*e, -1)/f).expand(deep=False).powsimp().simplify() == 1
 
 
 def test_manualintegrate_sqrt_linear():

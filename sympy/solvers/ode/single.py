@@ -15,6 +15,7 @@ from sympy.core.relational import Equality, Eq
 from sympy.core.symbol import Symbol, Dummy, Wild
 from sympy.core.mul import Mul
 from sympy.functions import exp, tan, log, sqrt, besselj, bessely, cbrt, airyai, airybi, Abs
+from sympy.functions.combinatorial.factorials import ff
 from sympy.integrals import Integral
 from sympy.polys import Poly
 from sympy.polys.polytools import cancel, factor, factor_list, degree
@@ -2641,7 +2642,7 @@ class NthLinearEulerEqNonhomogeneousUndeterminedCoefficients(SingleODESolver):
         chareq, eq, symbol = S.Zero, S.Zero, Dummy('x')
         for i in self.r.keys():
             if i >= 0:
-                chareq += (self.r[i]*diff(x**symbol, x, i)*x**-symbol).expand()
+                chareq += (self.r[i]*ff(symbol, i)/x**i).expand()
 
         for i in range(1, degree(Poly(chareq, symbol))+1):
             eq += chareq.coeff(symbol**i)*diff(f(x), x, i)

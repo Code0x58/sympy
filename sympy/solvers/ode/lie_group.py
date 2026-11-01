@@ -879,7 +879,7 @@ def lie_heuristic_abaco2_unique_unknown(match, comp=False):
             xitry1 = sep[x]
             etatry1 = -1/(sep[y]*sep['coeff'])
             pde1 = etatry1.diff(y)*h - xitry1.diff(x)*h - xitry1*hx - etatry1*hy
-            if not simplify(pde1):
+            if not simplify(expand(pde1)):
                 return [{xi: xitry1, eta: etatry1.subs(y, func)}]
             xitry2 = 1/etatry1
             etatry2 = 1/xitry1
@@ -1016,18 +1016,8 @@ def lie_heuristic_linear(match, comp=False):
     if pde.is_Add:
         terms = pde.args
         for term in terms:
-            if term.is_Mul:
-                rem = Mul(*[m for m in term.args if not m.has(x, y)])
-                xypart = term/rem
-                if xypart not in coeffdict:
-                    coeffdict[xypart] = rem
-                else:
-                    coeffdict[xypart] += rem
-            else:
-                if term not in coeffdict:
-                    coeffdict[term] = S.One
-                else:
-                    coeffdict[term] += S.One
+            rem, xypart = term.as_independent(x, y, as_Add=False)
+            coeffdict[xypart] = coeffdict.get(xypart, S.Zero) + rem
 
     sollist = coeffdict.values()
     soldict = solve(sollist, symlist)

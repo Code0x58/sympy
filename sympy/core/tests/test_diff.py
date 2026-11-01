@@ -9,7 +9,7 @@ from sympy.core.symbol import Symbol
 from sympy.functions.combinatorial.factorials import factorial
 from sympy.functions.elementary.complexes import (im, re)
 from sympy.functions.elementary.exponential import (exp, log)
-from sympy.functions.elementary.miscellaneous import Max
+from sympy.functions.elementary.miscellaneous import Max, sqrt
 from sympy.functions.elementary.piecewise import Piecewise
 from sympy.functions.elementary.trigonometric import (cos, cot, sin, tan)
 from sympy.tensor.array.ndim_array import NDimArray
@@ -95,6 +95,14 @@ def test_diff_pow_exponent_dependency():
     assert (x**n).diff(x) == n*x**(n - 1)
     assert (x**i).diff(x) == i*x**(i - 1)
     assert (x**f(x)).diff(x) == x**f(x)*(log(x)*f(x).diff(x) + f(x)/x)
+
+
+def test_diff_pow_at_zero():
+    # Substitute the base first to detect an uncancelled x/x.
+    assert (x**a).diff(x).subs(x, 0).subs(a, 1) == 1
+    assert ((x + 1)**a).diff(x).subs(x, -1).subs(a, 1) == 1
+    assert ((x**2)**Rational(3, 2)).diff(x).subs(x, 0) == 0
+    assert (x*sqrt(x**2)).diff(x).subs(x, 0) == 0
 
 
 def test_diff_no_eval_derivative():

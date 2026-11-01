@@ -703,6 +703,7 @@ def test_diff():
     assert Sum(x*y, (x, 1, 3), (a, 2, 5)).diff(y).doit() == \
         Sum(x*y, (x, 1, 3), (a, 2, 5)).doit().diff(y) == 24
     assert Sum(x, (x, 1, 2)).diff(y) == 0
+    assert Sum(x**(n + 1), (n, 0, 1)).diff(x).doit().subs(x, 0) == 1
 
 
 def test_hypersum():
