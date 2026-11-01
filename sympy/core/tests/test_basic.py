@@ -300,6 +300,26 @@ def test_is_same_iterable_lengths():
             assert not Basic.is_same(wrap(right), wrap(left))
 
 
+def test_is_same_list_equality_after_children():
+    class Item:
+        def __init__(self, owner, replacement):
+            self.owner = owner
+            self.replacement = replacement
+
+        def __eq__(self, other):
+            if not isinstance(other, Item):
+                return False
+            self.owner[:] = self.replacement
+            return True
+
+    for replacement in ([], [1, 2]):
+        for wrap in (lambda value: value, Basic, lambda value: (value,)):
+            left, right = [], []
+            left.append(Item(left, replacement))
+            right.append(Item(right, replacement))
+            assert not Basic.is_same(wrap(left), wrap(right))
+
+
 def test_structure():
     assert b21.args == (b2, b1)
     assert b21.func(*b21.args) == b21

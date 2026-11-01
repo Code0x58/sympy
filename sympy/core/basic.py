@@ -294,7 +294,6 @@ def _same_structure(a, b):
                 check_value = False
             elif a_type is list:
                 first, second = a, b
-                check_value = False
             elif isinstance(a, type):
                 first = second = ()
             else:
@@ -310,7 +309,7 @@ def _same_structure(a, b):
                 if len(first) != len(second):
                     result = False
                     continue
-                # These concrete types have no additional equality data.
+                # Exact Basic and built-in tuples have no additional equality data.
                 if all(left is right for left, right in zip(first, second)):
                     result = not check_value or bool(a == b)
                     continue
