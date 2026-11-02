@@ -4,7 +4,9 @@ import pytest
 from decimal import Decimal
 from fractions import Fraction
 from functools import partial
+from gc import collect
 from pickle import dumps, loads
+from weakref import ref
 
 from sympy.calculus.accumulationbounds import AccumBounds
 from sympy.concrete.summations import Sum
@@ -70,6 +72,20 @@ class _HiddenDescriptorMeta(type):
         if name in ('__get__', '__set_name__'):
             raise AttributeError(name)
         return super().__getattribute__(name)
+
+
+class _TupleMetadataMeta(type):
+    def __hash__(self):
+        return 0
+
+    def __eq__(self, other):
+        return isinstance(other, _TupleMetadataMeta)
+
+
+class _PickledOrderedTuple(tuple, metaclass=_TupleMetadataMeta):
+    __slots__ = ()
+    __lt__ = tuple.__gt__
+    __gt__ = tuple.__lt__
 
 
 def _primitive_alias_metaclass(target):
@@ -1676,6 +1692,85 @@ def test_function_metadata_container_storage(base):
     rebuilt = Function('a', value=Container([1]))
     assert first == rebuilt
     assert hash(first) == hash(rebuilt)
+
+
+@pytest.mark.parametrize('constructor', [Function, UndefinedFunction])
+def test_function_tuple_metadata_ordering_groups(constructor):
+    class ReverseTuple(tuple):
+        __slots__ = ()
+        __lt__ = tuple.__gt__
+        __gt__ = tuple.__lt__
+
+    class InheritedTuple(ReverseTuple):
+        __slots__ = ()
+
+    fields = [(1,), Tuple(1), ReverseTuple((1,)),
+              ReverseTuple((S.One,)), InheritedTuple((1,))]
+    values = [constructor('tuple_metadata_order', value=value) for value in fields]
+    keys = list(map(default_sort_key, values))
+    groups = (0, 0, 1, 1, 2)
+    for i, left in enumerate(values):
+        for j, right in enumerate(values):
+            equal = groups[i] == groups[j]
+            assert (left == right) == equal == (keys[i] == keys[j])
+            if equal:
+                assert hash(left) == hash(right)
+
+
+@pytest.mark.parametrize('base, args', [(tuple, ((1,),)), (int, (1,)), (float, (1,))])
+@pytest.mark.parametrize('hashable', [False, True])
+def test_function_metadata_type_identity(base, args, hashable):
+    class Meta(type):
+        __hash__ = (lambda self: 0) if hashable else None
+
+        def __eq__(self, other):
+            return isinstance(other, Meta)
+
+    namespace = {'__slots__': (), '__module__': __name__}
+    if base is tuple:
+        namespace.update(__lt__=tuple.__gt__, __gt__=tuple.__lt__)
+    first = Meta('MetadataValue', (base,), namespace.copy())
+    second = Meta('MetadataValue', (base,), namespace.copy())
+    assert first == second and first is not second
+    left = Function('metadata_type_identity', value=first(*args))
+    right = Function('metadata_type_identity', value=second(*args))
+    assert left != right
+    assert len({left, right}) == 2
+    assert default_sort_key(left) != default_sort_key(right)
+    clear_cache()
+    rebuilt = Function('metadata_type_identity', value=first(*args))
+    assert left == rebuilt
+    assert hash(left) == hash(rebuilt)
+    assert default_sort_key(left) == default_sort_key(rebuilt)
+
+
+@pytest.mark.parametrize('protocol', [2, 4])
+def test_function_tuple_metadata_pickle(protocol):
+    function = Function('pickled_tuple_metadata', value=_PickledOrderedTuple((1,)))
+    key = default_sort_key(function)
+    rebuilt, rebuilt_key = loads(dumps((function, key), protocol=protocol))
+    assert rebuilt == function
+    assert hash(rebuilt) == hash(function)
+    assert type(rebuilt.value) is _PickledOrderedTuple
+    assert rebuilt_key == key == default_sort_key(rebuilt)
+    assert hash(rebuilt_key) == hash(key)
+
+
+def test_function_tuple_metadata_class_lifetime():
+    class OrderedTuple(_PickledOrderedTuple):
+        __slots__ = ()
+
+    reference = ref(OrderedTuple)
+    function = Function('tuple_metadata_lifetime', value=OrderedTuple((1,)))
+    key = default_sort_key(function)
+    del function, OrderedTuple
+    clear_cache()
+    collect()
+    assert reference() is not None
+    del key
+    clear_cache()
+    collect()
+    assert reference() is None
 
 
 @pytest.mark.parametrize('base', [Tuple, FiniteSet])

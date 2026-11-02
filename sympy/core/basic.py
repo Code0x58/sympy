@@ -78,6 +78,16 @@ def _has_builtin_equality(value, cls):
         or _get_type_attribute(value, '__eq__') is cls.__eq__)
 
 
+def _tuple_comparison_type(value):
+    """Preserve owner types when tuple ordering has custom behavior."""
+    cls = type(value)
+    if cls is tuple or all(
+            _get_type_attribute(value, name) is getattr(tuple, name)
+            for name in ('__lt__', '__gt__')):
+        return tuple
+    return cls
+
+
 def _frozenset_args(value):
     """Apply Basic's argument identity to a frozenset's stored entries."""
     return frozenset(map(Basic, frozenset.__iter__(value)))
@@ -150,15 +160,21 @@ def _compare_args(left, right):
                     if not c:
                         raise TypeError(f"Cannot order {container.__name__} fields with custom equality")
                 elif container is tuple:
-                    c = 0
-                    if any(_get_type_attribute(value, name) is not getattr(tuple, name)
-                           for value in (l, r) for name in ('__lt__', '__gt__')):
+                    l_kind = _tuple_comparison_type(l)
+                    r_kind = l_kind if type(l) is type(r) else _tuple_comparison_type(r)
+                    if l_kind is not r_kind:
+                        from .function import _class_order_key
+                        lk, rk = _class_order_key(l_kind), _class_order_key(r_kind)
+                        c = (lk > rk) - (lk < rk)
+                    elif l_kind is tuple:
+                        c = _compare_tuple_args(l, r)
+                    else:
                         if _args_equal(tuple(tuple.__iter__(l)), tuple(tuple.__iter__(r))):
                             continue
                         c = bool(l > r) - bool(l < r)
-                    if not c:
-                        # Argument identity can distinguish native ordering ties.
-                        c = _compare_tuple_args(l, r)
+                        if not c:
+                            # Argument identity can distinguish native ordering ties.
+                            c = _compare_tuple_args(l, r)
                 else:
                     # Argument wrapping preserves cardinality.
                     l_size, r_size = frozenset.__len__(l), frozenset.__len__(r)
@@ -215,6 +231,9 @@ def _args_equal(left, right):
                 if a_builtin != b_builtin:
                     return False
                 if a_builtin:
+                    if (container is tuple and type(a) is not type(b)
+                            and _tuple_comparison_type(a) is not _tuple_comparison_type(b)):
+                        return False
                     size = container.__len__(a)
                     if size != container.__len__(b):
                         return False

@@ -45,7 +45,7 @@ from .add import Add
 from .assumptions import _assume_defined
 from .basic import (Atom, Basic, _atomic, _is_standard_number,
                     _get_postprocessors_for_type, _get_type_attribute,
-                    _has_builtin_equality)
+                    _has_builtin_equality, _tuple_comparison_type)
 from .cache import cacheit, cached_property, cacheit_by_identity
 from .containers import Tuple, Dict
 from .decorators import _sympifyit
@@ -1002,6 +1002,23 @@ def _class_order_key(cls):
     return tuple(map(str.__str__, names)) + (id(cls),)
 
 
+class _ClassIdentity:
+    """Retain a class using identity without invoking metaclass equality/hash."""
+    __slots__ = ('value',)
+
+    def __init__(self, value):
+        self.value = value
+
+    def __hash__(self):
+        return id(self.value)
+
+    def __eq__(self, other):
+        return isinstance(other, _ClassIdentity) and self.value is other.value
+
+    def __reduce__(self):
+        return _ClassIdentity, (self.value,)
+
+
 class _ComparisonKey:
     """Give hashable equality classes a stable order while their keys are live."""
     __slots__ = ('value', 'order', '_hash', '__weakref__')
@@ -1127,17 +1144,26 @@ def _get_class_order_key(cls, cls_hash):
         candidate = _class_order_key(cls)
 
 
+def _metadata_type_key(cls):
+    """Preserve actual class identity even with custom metaclass semantics."""
+    if type(cls) is type or (
+            _get_type_attribute(cls, '__eq__') is type.__eq__
+            and _get_type_attribute(cls, '__hash__') is type.__hash__):
+        return cls
+    return _get_comparison_key(_ClassIdentity(cls))
+
+
 def _canonical_function_metadata(value):
     """Canonicalize standard values, retaining complete subclass identities."""
     if isinstance(value, Basic):
         if isinstance(value, Tuple):
             if type(value) is not Tuple:
-                return (type(value), value)
+                return (_metadata_type_key(type(value)), value)
             return (Tuple, tuple(map(_canonical_function_metadata, value.args)))
         if getattr(value, 'is_FiniteSet', False):
             from sympy.sets.sets import FiniteSet
             if type(value) is not FiniteSet and value is not S.EmptySet:
-                return (type(value), value)
+                return (_metadata_type_key(type(value)), value)
             return (type(value), frozenset(map(_canonical_function_metadata, value.args)))
         return value
     if _is_standard_number(value):
@@ -1146,12 +1172,14 @@ def _canonical_function_metadata(value):
         return sympify(value)
     # Built-in container equality uses stored contents, not overridden iteration.
     if _has_builtin_equality(value, tuple):
-        return (Tuple, tuple(map(_canonical_function_metadata, tuple.__iter__(value))))
+        kind = _tuple_comparison_type(value)
+        marker = Tuple if kind is tuple else _metadata_type_key(kind)
+        return (marker, tuple(map(_canonical_function_metadata, tuple.__iter__(value))))
     if _has_builtin_equality(value, frozenset):
         from sympy.sets.sets import FiniteSet
         cls = FiniteSet if frozenset.__len__(value) else S.EmptySet.func
         return (cls, frozenset(map(_canonical_function_metadata, frozenset.__iter__(value))))
-    return (type(value), value)
+    return (_metadata_type_key(type(value)), value)
 
 
 _empty_function_metadata = frozenset()

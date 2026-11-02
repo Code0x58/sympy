@@ -573,6 +573,35 @@ def test_tuple_argument_custom_ordering():
             assert first.compare(symbolic) == -symbolic.compare(first) != 0
 
 
+def test_tuple_argument_ordering_groups():
+    class PlainTuple(tuple):
+        __slots__ = ()
+
+    class ReverseTuple(tuple):
+        __slots__ = ()
+        __lt__ = tuple.__gt__
+        __gt__ = tuple.__lt__
+
+    class InheritedTuple(ReverseTuple):
+        __slots__ = ()
+
+    fields = [(1,), PlainTuple((1,)), ReverseTuple((1,)),
+              ReverseTuple((1.0,)), InheritedTuple((1,)), (2,), ReverseTuple((2,))]
+    values = list(map(Basic, fields))
+    groups = (0, 0, 1, 1, 2, 3, 4)
+    for i, left in enumerate(values):
+        for j, right in enumerate(values):
+            equal = groups[i] == groups[j]
+            assert (left == right) == equal
+            comparison = left.compare(right)
+            assert (comparison == 0) == equal
+            assert comparison == -right.compare(left)
+            if equal:
+                assert hash(left) == hash(right)
+                for other in values:
+                    assert left.compare(other) == right.compare(other)
+
+
 def test_frozenset_argument_storage():
     class StoredSet(frozenset):
         def __iter__(self):

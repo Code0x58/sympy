@@ -268,6 +268,34 @@ def test_tuple_field_custom_ordering():
         assert default_sort_key(first) < default_sort_key(second)
 
 
+def test_tuple_field_ordering_groups():
+    class Meta(type):
+        def __eq__(self, other):
+            return isinstance(other, Meta)
+
+        def __hash__(self):
+            return 0
+
+    namespace = {'__slots__': (), '__module__': __name__,
+                 '__lt__': tuple.__gt__, '__gt__': tuple.__lt__}
+    first = Meta('OrderedTuple', (tuple,), namespace.copy())
+    second = Meta('OrderedTuple', (tuple,), namespace.copy())
+    assert first == second and first is not second
+    values = list(map(Basic, [(1,), (2,), first((1,)), first((2,)), second((1,))]))
+    assert values[2] != values[4]
+    keys = list(map(default_sort_key, values))
+    for i, left in enumerate(values):
+        for j, right in enumerate(values):
+            comparison = left.compare(right)
+            assert (comparison == 0) == (left == right) == (keys[i] == keys[j])
+            assert comparison == -right.compare(left)
+            assert (comparison < 0) == (keys[i] < keys[j])
+            assert (comparison > 0) == (keys[i] > keys[j])
+    expected = sorted(values, key=default_sort_key)
+    for items in permutations(values):
+        assert sorted(items, key=default_sort_key) == expected
+
+
 def test_native_argument_boolean_comparison():
     class Value:
         def __init__(self, value):
