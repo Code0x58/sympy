@@ -30,6 +30,49 @@ class _LabelSet(_Label, frozenset):
         return frozenset.__new__(cls, [0])
 
 
+class _TupleLabel(_Label):
+    def __lt__(self, other):
+        if isinstance(other, tuple):
+            return self.label < tuple.__getitem__(other, 0)
+        return super().__lt__(other)
+
+    def __gt__(self, other):
+        if isinstance(other, tuple):
+            return self.label > tuple.__getitem__(other, 0)
+        return super().__gt__(other)
+
+
+class _TupleLabelTuple(_TupleLabel, tuple):
+    __slots__ = ()
+
+    def __new__(cls, label):
+        return tuple.__new__(cls, (label,))
+
+
+class _TupleLabelSet(_TupleLabel, frozenset):
+    def __new__(cls, label):
+        return frozenset.__new__(cls, (label,))
+
+
+class TimeMixedNativeFields:
+    params = ['scalar', 'tuple', 'frozenset']
+    param_names = ['other']
+
+    def setup(self, other):
+        cls = {'scalar': _TupleLabel, 'tuple': _TupleLabelTuple,
+               'frozenset': _TupleLabelSet}[other]
+        self.first, self.second = Basic((1,)), Basic(cls(1.5))
+        self.left, self.right = map(default_sort_key, (self.first, self.second))
+        assert self.first.compare(self.second) == -1
+        assert self.left < self.right
+
+    def time_comparison(self, other):
+        self.first.compare(self.second)
+
+    def time_key_comparison(self, other):
+        self.left < self.right
+
+
 class TimeNativeFields:
     def setup(self):
         self.native = Basic((1, 2))

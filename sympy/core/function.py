@@ -45,7 +45,7 @@ from .add import Add
 from .assumptions import _assume_defined
 from .basic import (Atom, Basic, _atomic, _is_standard_number,
                     _get_postprocessors_for_type, _get_type_attribute,
-                    _has_builtin_equality, _tuple_comparison_type)
+                    _builtin_container_type, _tuple_comparison_type)
 from .cache import cacheit, cached_property, cacheit_by_identity
 from .containers import Tuple, Dict
 from .decorators import _sympifyit
@@ -1171,11 +1171,12 @@ def _canonical_function_metadata(value):
             return Rational(*value.as_integer_ratio())
         return sympify(value)
     # Built-in container equality uses stored contents, not overridden iteration.
-    if _has_builtin_equality(value, tuple):
+    container = _builtin_container_type(value)
+    if container is tuple:
         kind = _tuple_comparison_type(value)
         marker = Tuple if kind is tuple else _metadata_type_key(kind)
         return (marker, tuple(map(_canonical_function_metadata, tuple.__iter__(value))))
-    if _has_builtin_equality(value, frozenset):
+    if container is frozenset:
         from sympy.sets.sets import FiniteSet
         cls = FiniteSet if frozenset.__len__(value) else S.EmptySet.func
         return (cls, frozenset(map(_canonical_function_metadata, frozenset.__iter__(value))))

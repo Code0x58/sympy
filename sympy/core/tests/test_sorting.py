@@ -229,10 +229,8 @@ def test_tuple_field_partial_order():
     keys = [default_sort_key(value) for value in (first, second)]
     assert keys[0] != keys[1]
     for a, b in ((0, 1), (1, 0)):
-        with raises(TypeError, match='Cannot order tuple fields with custom equality'):
-            expressions[a].compare(expressions[b])
-        with raises(TypeError, match='Cannot order tuple fields with custom equality'):
-            assert keys[a] < keys[b]
+        assert expressions[a].compare(expressions[b]) == (a > b) - (a < b)
+        assert (keys[a] < keys[b]) == (a < b)
 
 
 def test_tuple_field_custom_ordering():
@@ -294,6 +292,78 @@ def test_tuple_field_ordering_groups():
     expected = sorted(values, key=default_sort_key)
     for items in permutations(values):
         assert sorted(items, key=default_sort_key) == expected
+
+
+@pytest.mark.parametrize('wrap', [lambda value: value, lambda value: (value,),
+                                 lambda value: frozenset([value])])
+def test_tuple_field_native_comparison_groups(wrap):
+    class OrderedTuple(tuple):
+        __slots__ = ()
+
+        def __lt__(self, other):
+            return tuple.__lt__(self, other)
+
+        def __gt__(self, other):
+            return tuple.__gt__(self, other)
+
+    class Between:
+        def __eq__(self, other):
+            return isinstance(other, Between)
+
+        def __hash__(self):
+            return 0
+
+        def __lt__(self, other):
+            if isinstance(other, Between):
+                return False
+            if isinstance(other, tuple):
+                return ((1.5,), 1) < (tuple(tuple.__iter__(other)), 0)
+            return NotImplemented
+
+        def __gt__(self, other):
+            if isinstance(other, Between):
+                return False
+            if isinstance(other, tuple):
+                return ((1.5,), 1) > (tuple(tuple.__iter__(other)), 0)
+            return NotImplemented
+
+    class TupleBetween(Between, OrderedTuple):
+        __slots__ = ()
+
+        def __new__(cls):
+            return tuple.__new__(cls, (1.5,))
+
+    class SetBetween(Between, frozenset):
+        def __new__(cls):
+            return frozenset.__new__(cls, (1.5,))
+
+    ordered, plain = OrderedTuple((2,)), (1,)
+    aliases = Between(), TupleBetween(), SetBetween()
+    for value in aliases:
+        assert plain < value < ordered
+    values = [Basic(wrap(value)) for value in (frozenset([0]), ordered, plain, *aliases)]
+    keys = list(map(default_sort_key, values))
+    groups = (0, 1, 2, 3, 3, 3)
+    for i, left in enumerate(values):
+        for j, right in enumerate(values):
+            comparison = (groups[i] > groups[j]) - (groups[i] < groups[j])
+            assert left.compare(right) == comparison
+            assert (left == right) == (groups[i] == groups[j]) == (keys[i] == keys[j])
+            assert (keys[i] > keys[j]) - (keys[i] < keys[j]) == comparison
+            if groups[i] == groups[j]:
+                assert hash(left) == hash(right)
+    for items in permutations(values):
+        assert sorted(items, key=default_sort_key) == values
+
+
+@pytest.mark.parametrize('scalar', [0, None, 'a', 1 + 2j])
+def test_tuple_field_scalar_sort_keys(scalar):
+    values = [Basic(()), Basic((1,)), Basic(scalar)]
+    for i, left in enumerate(values):
+        for j, right in enumerate(values):
+            assert left.compare(right) == (i > j) - (i < j)
+    for items in permutations(values):
+        assert sorted(items, key=default_sort_key) == values
 
 
 def test_native_argument_boolean_comparison():
