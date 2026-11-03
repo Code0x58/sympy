@@ -1306,8 +1306,11 @@ def _is_ordinary_symbol(value):
 
 
 @cacheit
-def _has_standard_atom_hooks(cls):
+def _has_standard_atom_hooks(cls_key):
     """Recognize atoms whose hooks preserve an ordinary bound symbol."""
+    cls = cls_key.value
+    if type(cls) is not type and type(cls) is not Singleton:
+        return False
     modules = (Atom.__module__, AtomicExpr.__module__, Number.__module__,
                Symbol.__module__, 'sympy.logic.boolalg')
     # Custom operators can inspect bound names through rebuilt parents.
@@ -2891,8 +2894,7 @@ class Subs(Expr):
                     return key
             elif isinstance(node, Atom):
                 cls = type(node)
-                if ((type(cls) is not type and type(cls) is not Singleton)
-                        or node.args or not _has_standard_atom_hooks(cls)):
+                if node.args or not _has_standard_atom_hooks(_ClassIdentity(cls)):
                     return key
             elif not any(type(node) is cls for cls in (
                     Basic, Expr, Add, Mul, Pow, Derivative, Tuple, Dict, Integral)):
@@ -2995,6 +2997,14 @@ class Subs(Expr):
                             if node == old:
                                 return False
                             continue
+                        # Static inspection requires trusted class identity and hashing.
+                        meta = type(type(node))
+                        if (meta is not type and meta is not Singleton
+                                and meta is not FunctionClass and meta is not UndefinedFunction):
+                            return False
+                        if (isinstance(node, Number)
+                                and not _has_standard_atom_hooks(_ClassIdentity(type(node)))):
+                            return False
                         if (not isinstance(node, Basic)
                                 or _get_type_attribute(node, '__getattribute__') is not object.__getattribute__
                                 or _get_type_attribute(node, '__class__') is not object.__dict__['__class__']
@@ -3011,7 +3021,7 @@ class Subs(Expr):
                         elif not (any(hook is method for method in (
                                     Basic._eval_subs, Function._eval_subs, Symbol._eval_subs,
                                     Add._eval_subs, Mul._eval_subs))
-                                or isinstance(node, Number) and _has_standard_atom_hooks(type(node))
+                                or isinstance(node, Number)
                                 and any(hook is method for method in (
                                     Number._eval_subs, Infinity._eval_subs, NegativeInfinity._eval_subs))):
                             return False

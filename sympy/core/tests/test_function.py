@@ -13,7 +13,7 @@ from sympy.concrete.summations import Sum
 from sympy.concrete.products import Product
 from sympy.core.add import Add
 from sympy.core.basic import Basic, _aresame
-from sympy.core.cache import clear_cache
+from sympy.core.cache import USE_CACHE, clear_cache
 from sympy.core.containers import Dict, Tuple
 from sympy.core.expr import AtomicExpr, Expr, unchanged
 from sympy.core.function import (Subs, Function, diff, Lambda, expand,
@@ -2518,6 +2518,86 @@ def test_Subs_standard_atomic_behavior(atom):
     first, second = Subs(Tuple(f(x), atom), x, 0), Subs(Tuple(f(z), atom), z, 0)
     assert first == second
     assert hash(first) == hash(second)
+
+
+@pytest.mark.parametrize('hashable', [False, True])
+def test_Subs_atomic_hook_cache_class_identity(hashable):
+    class Meta(type):
+        __hash__ = (lambda self: 0) if hashable else None
+
+        def __eq__(self, other):
+            return isinstance(other, Meta)
+
+    class Passive(Rational, metaclass=Meta):
+        pass
+
+    class Negating(Rational, metaclass=Meta):
+        def __neg__(self):
+            return y
+
+    passive, negating = Passive(1, 3), Negating(2, 5)
+    assert type(passive) is Passive and type(negating) is Negating
+    assert Passive == Negating and Passive is not Negating
+    requests = [Subs(Tuple(f(x), value), x, 0) for value in (passive, negating)]
+    expected = [Tuple(f(0), passive), Tuple(f(0), -x)]
+    for indices in ((0, 1), (1, 0)):
+        clear_cache()
+        for i in indices:
+            assert requests[i].subs(y, x).doit() == expected[i]
+
+
+def test_Subs_atomic_hook_cache_type_alias():
+    class Passive(Rational):
+        pass
+
+    class Meta(type, metaclass=_primitive_alias_metaclass(type)):
+        def __eq__(self, other):
+            return other is Passive or isinstance(other, Meta)
+
+        def __hash__(self):
+            return hash(Passive)
+
+    class Negating(Rational, metaclass=Meta):
+        def __neg__(self):
+            return y
+
+    assert Meta == type and Meta is not type
+    assert Passive == Negating and hash(Passive) == hash(Negating)
+    passive, negating = Passive(1, 3), Negating(2, 5)
+    assert type(passive) is Passive and type(negating) is Negating
+    requests = [Subs(Tuple(f(x), value), x, 0) for value in (passive, negating)]
+    expected = [Tuple(f(0), passive), Tuple(f(0), -x)]
+    for indices in ((0, 1), (1, 0)):
+        clear_cache()
+        for i in indices:
+            assert requests[i].subs(y, x).doit() == expected[i]
+    first, second = [Subs(Tuple(f(variable), negating), variable, 0) for variable in (x, y)]
+    assert first.doit() != second.doit()
+    assert first != second
+
+
+@pytest.mark.parametrize('base', [AtomicExpr, Expr])
+def test_Subs_atomic_class_hash_unavailable(base):
+    class Meta(type):
+        def __hash__(self):
+            raise ValueError('class hashing is unavailable')
+
+    class Opaque(base, metaclass=Meta):
+        pass
+
+    atom = Opaque()
+    first, second = Subs(Tuple(f(x), atom), x, 0), Subs(Tuple(f(z), atom), z, 0)
+    assert first != second
+    rebuilt = first.func(*first.args)
+    assert first == rebuilt
+    assert hash(first) == hash(rebuilt)
+    if USE_CACHE == 'no':
+        result = first.subs(y, x)
+        assert result == first
+        assert result.doit() == Tuple(f(0), atom)
+    else:
+        with pytest.raises(ValueError, match='class hashing is unavailable'):
+            first.subs(y, x)
 
 
 def test_Subs_atomic_power_hook_identity():

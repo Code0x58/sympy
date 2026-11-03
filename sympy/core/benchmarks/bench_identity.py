@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sympy import Basic, Expr, Float, Function, S, Subs, Symbol, default_sort_key, sin
+from sympy import Basic, Expr, Float, Function, Rational, S, Subs, Symbol, Tuple, default_sort_key, sin
 from sympy.core.cache import clear_cache
 from sympy.core.function import AppliedUndef, UndefinedFunction
 from sympy.core.traversal import preorder_traversal, postorder_traversal
@@ -250,6 +250,29 @@ class _ClassMeta(type):
 
     def __gt__(cls, other):
         return cls.label > other.label
+
+
+_aliased_rationals = tuple(_ClassMeta('PassiveRational', (Rational,),
+    {'label': 0, '__module__': __name__}) for _ in range(2))
+
+
+class TimeAtomicHookCache:
+    params = [False, True]
+    param_names = ['alias_classes']
+
+    def setup(self, alias_classes):
+        classes = _aliased_rationals if alias_classes else (Rational, Rational)
+        first, second = classes[0](1, 3), classes[1](2, 5)
+        x, self.old = Symbol('hook_cache_x'), Symbol('hook_cache_y')
+        self.new = x
+        function = Function('hook_cache_function')
+        primer = Subs(Tuple(function(x), first), x, 0)
+        self.source = Subs(Tuple(function(x), second), x, 0)
+        primer._eval_subs(self.old, self.new)
+        assert self.source._eval_subs(self.old, self.new).doit() == Tuple(function(0), second)
+
+    def time_eval_subs(self, alias_classes):
+        self.source._eval_subs(self.old, self.new)
 
 
 class TimeClassLiteralKeys:
