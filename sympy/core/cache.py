@@ -43,6 +43,42 @@ clear_cache = CACHE.clear_cache
 
 from functools import lru_cache, wraps
 
+
+class _IdentityKey:
+    """Keep a value alive while using its identity as a key."""
+    __slots__ = ('value',)
+
+    def __init__(self, value):
+        self.value = value
+
+    def __hash__(self):
+        return id(self.value)
+
+    def __eq__(self, other):
+        return type(self) is type(other) and self.value is other.value
+
+    def __reduce__(self):
+        return type(self), (self.value,)
+
+
+class _ReceiverIdentityKey(_IdentityKey):
+    """Preserve hashability and concrete-type checks for cached receivers."""
+    __slots__ = ('owner_type',)
+
+    def __init__(self, value):
+        self.value = value
+        self.owner_type = type(value)
+
+    def __hash__(self):
+        # Unhashable receivers bypass caching.
+        hash(self.value)
+        return id(self.value)
+
+    def __eq__(self, other):
+        return (type(self) is type(other) and self.value is other.value
+                and self.owner_type is other.owner_type)
+
+
 def __cacheit(maxsize, *, by_identity=False):
     """caching decorator.
 
@@ -67,8 +103,8 @@ def __cacheit(maxsize, *, by_identity=False):
     def func_wrapper(func):
         if by_identity:
             @wraps(func)
-            def cached(identity, self, /, *args, **kwargs):
-                return func(self, *args, **kwargs)
+            def cached(self_key, /, *args, **kwargs):
+                return func(self_key.value, *args, **kwargs)
         else:
             cached = func
         cfunc = lru_cache(maxsize, typed=True)(cached)
@@ -79,7 +115,7 @@ def __cacheit(maxsize, *, by_identity=False):
                 if not args:
                     return func(**kwargs)
                 try:
-                    return cfunc(id(args[0]), *args, **kwargs)
+                    return cfunc(_ReceiverIdentityKey(args[0]), *args[1:], **kwargs)
                 except TypeError as e:
                     if not e.args or not e.args[0].startswith('unhashable type:'):
                         raise
@@ -180,13 +216,13 @@ def cacheit_by_identity(func):
         return identity_cache(func)
     @cacheit
     @wraps(func)
-    def cached(identity, self, /, *args, **kwargs):
-        return func(self, *args, **kwargs)
+    def cached(self_key, /, *args, **kwargs):
+        return func(self_key.value, *args, **kwargs)
 
     @wraps(cached)
     def wrapper(*args, **kwargs):
         if args:
-            return cached(id(args[0]), *args, **kwargs)
+            return cached(_ReceiverIdentityKey(args[0]), *args[1:], **kwargs)
         return func(**kwargs)
 
     wrapper.__wrapped__ = func

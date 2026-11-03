@@ -1066,6 +1066,20 @@ def test_matches_basic():
     assert b1.match(b1) == {}
 
 
+def test_structural_query_metaclass_hash():
+    def reject_class_hash(cls):
+        raise ValueError('receiver class hashing is unavailable')
+
+    x, y = symbols('x y')
+    for class_hash in (None, reject_class_hash):
+        meta = type('Meta', (type,), {'__hash__': class_hash})
+        node_type = meta('Node', (Basic,), {})
+        value = node_type(x)
+        assert value.has(x) and not value.has(y)
+        assert value.has_free(x) and not value.has_free(y)
+        assert value.sort_key() == value.sort_key()
+
+
 def test_has():
     assert b21.has(b1)
     assert b21.has(b3, b1)

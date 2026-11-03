@@ -252,6 +252,29 @@ class _ClassMeta(type):
         return cls.label > other.label
 
 
+class TimeReceiverQueryCache:
+    params = [False, True]
+    param_names = ['custom_metaclass']
+
+    def setup(self, custom_metaclass):
+        cls = (_ClassMeta('QueryNode', (Basic,), {'label': 0})
+               if custom_metaclass else Basic)
+        self.pattern = Symbol('receiver_query_x')
+        self.source = cls(self.pattern)
+        assert self.source.has(self.pattern)
+        assert self.source.has_free(self.pattern)
+        assert self.source.sort_key() == self.source.sort_key()
+
+    def time_has(self, custom_metaclass):
+        self.source.has(self.pattern)
+
+    def time_has_free(self, custom_metaclass):
+        self.source.has_free(self.pattern)
+
+    def time_sort_key(self, custom_metaclass):
+        self.source.sort_key()
+
+
 _aliased_rationals = tuple(_ClassMeta('PassiveRational', (Rational,),
     {'label': 0, '__module__': __name__}) for _ in range(2))
 

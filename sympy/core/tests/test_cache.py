@@ -79,7 +79,11 @@ def test_cacheit_by_identity_policies(monkeypatch):
             scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
             decorate = scope['cacheit_by_identity']
 
-            class Equal:
+            class Meta(type):
+                def __hash__(self):
+                    raise ValueError('receiver class hashing is unavailable')
+
+            class Equal(metaclass=Meta):
                 def __eq__(self, other):
                     return isinstance(other, Equal)
 
@@ -118,6 +122,48 @@ def test_cacheit_by_identity_policies(monkeypatch):
                 assert length(receiver, values) == length(receiver, values) == 0
                 assert len(calls) == (4 if mode == 'debug' else 2)
                 assert all(value == id(receiver) for value in calls)
+
+            class BadHash:
+                def __hash__(self):
+                    raise ValueError('receiver hashing is unavailable')
+
+            @decorate
+            def identify(receiver):
+                return id(receiver)
+
+            receiver = BadHash()
+            if mode == 'no' or size == '0':
+                assert identify(receiver) == id(receiver)
+            else:
+                raises(ValueError, lambda: identify(receiver))
+
+
+def test_cacheit_by_identity_owner_type():
+    class Meta(type):
+        def __eq__(self, other):
+            return isinstance(other, Meta)
+
+        def __hash__(self):
+            return 0
+
+    class Receiver(metaclass=Meta):
+        @cacheit_by_identity
+        def kind(self):
+            return type(self).__name__
+
+    class First(Receiver):
+        pass
+
+    class Second(Receiver):
+        pass
+
+    assert First == Second and First is not Second
+    value = First()
+    assert value.kind() == 'First'
+    value.__class__ = Second
+    assert value.kind() == 'Second'
+    value.__class__ = First
+    assert value.kind() == 'First'
 
 
 def test_cacheit_by_identity_exceptions():

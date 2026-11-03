@@ -46,7 +46,7 @@ from .assumptions import _assume_defined
 from .basic import (Atom, Basic, _atomic, _is_standard_number,
                     _get_postprocessors_for_type, _get_type_attribute,
                     _builtin_container_type, _tuple_comparison_type)
-from .cache import cacheit, cached_property, cacheit_by_identity
+from .cache import cacheit, cached_property, cacheit_by_identity, _IdentityKey as _ClassIdentity
 from .containers import Tuple, Dict
 from .decorators import _sympifyit
 from .evalf import pure_complex
@@ -1000,23 +1000,6 @@ def _class_order_key(cls):
     names = type(cls).__name__, cls.__name__, str(cls.__module__), cls.__qualname__
     # Name subclasses must not retain their owning classes through the cache.
     return tuple(map(str.__str__, names)) + (id(cls),)
-
-
-class _ClassIdentity:
-    """Retain a class using identity without invoking metaclass equality/hash."""
-    __slots__ = ('value',)
-
-    def __init__(self, value):
-        self.value = value
-
-    def __hash__(self):
-        return id(self.value)
-
-    def __eq__(self, other):
-        return isinstance(other, _ClassIdentity) and self.value is other.value
-
-    def __reduce__(self):
-        return _ClassIdentity, (self.value,)
 
 
 class _ComparisonKey:
