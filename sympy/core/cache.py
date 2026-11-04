@@ -65,7 +65,7 @@ class _ReceiverIdentityKey(_IdentityKey):
     """Preserve hashability and concrete-type checks for cached receivers."""
     __slots__ = ('owner_type',)
 
-    def __init__(self, value):
+    def __init__(self, value, *args):
         self.value = value
         self.owner_type = type(value)
 
@@ -100,7 +100,7 @@ def __cacheit(maxsize, *, by_identity=False):
         to force cacheit to check returned results mutability and consistency,
         set environment variable SYMPY_USE_CACHE to 'debug'
     """
-    def func_wrapper(func):
+    def func_wrapper(func, *, _identity_key=_ReceiverIdentityKey):
         if by_identity:
             @wraps(func)
             def cached(self_key, /, *args, **kwargs):
@@ -115,9 +115,10 @@ def __cacheit(maxsize, *, by_identity=False):
                 if not args:
                     return func(**kwargs)
                 try:
-                    return cfunc(_ReceiverIdentityKey(args[0]), *args[1:], **kwargs)
+                    return cfunc(_identity_key(*args), *args[1:], **kwargs)
                 except TypeError as e:
-                    if not e.args or not e.args[0].startswith('unhashable type:'):
+                    if (not e.args or type(e.args[0]) is not str
+                            or not e.args[0].startswith('unhashable type:')):
                         raise
                     return func(*args, **kwargs)
         else:
@@ -126,7 +127,8 @@ def __cacheit(maxsize, *, by_identity=False):
                 try:
                     retval = cfunc(*args, **kwargs)
                 except TypeError as e:
-                    if not e.args or not e.args[0].startswith('unhashable type:'):
+                    if (not e.args or type(e.args[0]) is not str
+                            or not e.args[0].startswith('unhashable type:')):
                         raise
                     retval = func(*args, **kwargs)
                 return retval
@@ -209,11 +211,14 @@ else:
         'unrecognized value for SYMPY_USE_CACHE: %s' % USE_CACHE)
 
 
-def cacheit_by_identity(func):
-    """Cache a method separately for each instance, using cacheit's policies."""
+def cacheit_by_identity(func, *, key=_ReceiverIdentityKey):
+    """Cache a method using cacheit's policies and a receiver identity key.
+
+    The key receives all positional arguments and exposes the receiver as ``value``.
+    """
     identity_cache = getattr(cacheit, '_by_identity', None)
     if identity_cache is not None:
-        return identity_cache(func)
+        return identity_cache(func, _identity_key=key)
     @cacheit
     @wraps(func)
     def cached(self_key, /, *args, **kwargs):
@@ -222,7 +227,7 @@ def cacheit_by_identity(func):
     @wraps(cached)
     def wrapper(*args, **kwargs):
         if args:
-            return cached(_ReceiverIdentityKey(args[0]), *args[1:], **kwargs)
+            return cached(key(*args), *args[1:], **kwargs)
         return func(**kwargs)
 
     wrapper.__wrapped__ = func

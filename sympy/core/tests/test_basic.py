@@ -1090,6 +1090,142 @@ def test_has():
     assert not Symbol("x").has("x")
 
 
+def test_structural_query_class_patterns():
+    checks = []
+
+    class Meta(type):
+        def __eq__(cls, other):
+            return isinstance(other, Meta)
+
+        def __hash__(cls):
+            return 0
+
+        def __instancecheck__(cls, value):
+            checks.append(cls)
+            return type.__instancecheck__(cls, value)
+
+    first, second = [Meta(name, (Basic,), {}) for name in ('First', 'Second')]
+    assert first == second and first is not second
+    x = Symbol('class_pattern_x')
+    value = first(x)
+    for source in (value, Basic(value), Lambda(Symbol('bound'), value)):
+        for name in ('has', 'has_free'):
+            method = getattr(source, name)
+            for patterns in ((first, second), (second, first)):
+                clear_cache()
+                assert [method(pattern) for pattern in patterns] == [
+                    pattern is first for pattern in patterns]
+                clear_cache()
+                assert method(*patterns)
+    for name in ('has', 'has_free'):
+        checks.clear()
+        assert not getattr(Basic, name).__wrapped__(Basic(), second, second)
+        assert len(checks) == 1 and checks[0] is second
+    source = Basic(first)
+    assert not source.has(first)
+    assert not source.has_free(first)
+    assert source.has_xfree({first})
+
+
+def test_structural_query_unhashable_class_patterns():
+    class Meta(type):
+        __hash__ = None
+
+    first, second = [Meta(name, (Basic,), {}) for name in ('First', 'Second')]
+    value = first(Symbol('class_pattern_x'))
+    for name in ('has', 'has_free'):
+        method = getattr(value, name)
+        assert method(first)
+        assert not method(second)
+        assert method(second, first)
+
+
+def test_structural_query_pattern_type_identity():
+    class Meta(type):
+        def __eq__(cls, other):
+            return isinstance(other, Meta)
+
+        def __hash__(cls):
+            return 0
+
+    class Pattern(Basic):
+        def __eq__(self, other):
+            return isinstance(other, Pattern)
+
+        def __hash__(self):
+            return 0
+
+    first = Meta('FirstPattern', (Pattern,), {
+        '_has_matcher': lambda self: lambda node: True})()
+    second = Meta('SecondPattern', (Pattern,), {
+        '_has_matcher': lambda self: lambda node: False})()
+    assert first == second and hash(first) == hash(second)
+    assert type(first) == type(second) and type(first) is not type(second)
+    value = Basic()
+    for name in ('has', 'has_free'):
+        method = getattr(value, name)
+        for patterns in ((first, second), (second, first)):
+            clear_cache()
+            assert [method(pattern) for pattern in patterns] == [
+                pattern is first for pattern in patterns]
+
+
+def test_structural_query_value_and_class_patterns():
+    class Meta(type):
+        def __eq__(cls, other):
+            return other is type or isinstance(other, Meta)
+
+        def __hash__(cls):
+            return hash(type)
+
+    class Value(Basic):
+        def __eq__(self, other):
+            return other is Symbol or isinstance(other, Value)
+
+        def __hash__(self):
+            return hash(Symbol)
+
+    pattern = Meta('Pattern', (Value,), {})()
+    value = Value()
+    assert value == pattern == Symbol and value == Symbol
+    assert hash(value) == hash(pattern) == hash(Symbol)
+    assert type(pattern) == type and type(pattern) is not type
+    for name in ('has', 'has_free'):
+        method = getattr(value, name)
+        for patterns in ((pattern, Symbol), (Symbol, pattern)):
+            clear_cache()
+            assert [method(arg) for arg in patterns] == [arg is pattern for arg in patterns]
+
+
+def test_structural_query_pattern_metaclass_change():
+    class MetaMeta(type):
+        def __eq__(cls, other):
+            return isinstance(other, MetaMeta)
+
+        def __hash__(cls):
+            return 0
+
+    class First(type, metaclass=MetaMeta):
+        def __instancecheck__(cls, value):
+            return True
+
+    class Second(type, metaclass=MetaMeta):
+        def __instancecheck__(cls, value):
+            return False
+
+    assert First == Second and First is not Second
+    pattern = First('Pattern', (Basic,), {})
+    value = Basic()
+    for name in ('has', 'has_free'):
+        method = getattr(value, name)
+        pattern.__class__ = First
+        assert method(pattern)
+        pattern.__class__ = Second
+        assert not method(pattern)
+        pattern.__class__ = First
+        assert method(pattern)
+
+
 def test_native_argument_query_cache():
     for wrap in (lambda value: value, Basic, Tuple):
         expressions = [wrap(Basic(value)) for value in (1, 1.0)]

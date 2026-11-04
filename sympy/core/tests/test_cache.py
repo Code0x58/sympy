@@ -180,6 +180,51 @@ def test_cacheit_by_identity_exceptions():
         assert len(calls) == 1 and calls[0] is receiver
 
 
+def test_cacheit_nonstring_typeerror(monkeypatch):
+    class Message(str):
+        __slots__ = ()
+
+        def startswith(self, *args):
+            raise AssertionError('exception messages must not supply cache hooks')
+
+    for mode in ('yes', 'no', 'debug'):
+        for size in ('0', '2', 'None'):
+            monkeypatch.setenv('SYMPY_USE_CACHE', mode)
+            monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
+            scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+            for name in ('cacheit', 'cacheit_by_identity'):
+                for argument in (None, 123, [], Message('error'), Message('unhashable type: custom')):
+                    error = TypeError(argument)
+                    calls = []
+
+                    @scope[name]
+                    def fail(receiver):
+                        calls.append(receiver)
+                        raise error
+
+                    receiver = object()
+                    with raises(TypeError) as caught:
+                        fail(receiver)
+                    assert caught.value is error
+                    assert calls == [receiver]
+
+                    class BadHash:
+                        def __hash__(self):
+                            raise error
+
+                    @scope[name]
+                    def identify(receiver):
+                        return id(receiver)
+
+                    receiver = BadHash()
+                    if mode == 'no' or size == '0':
+                        assert identify(receiver) == id(receiver)
+                    else:
+                        with raises(TypeError) as caught:
+                            identify(receiver)
+                        assert caught.value is error
+
+
 def test_cachit_exception():
     # Make sure the cache doesn't call functions multiple times when they
     # raise TypeError

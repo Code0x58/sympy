@@ -275,6 +275,42 @@ class TimeReceiverQueryCache:
         self.source.sort_key()
 
 
+class TimeClassPatternQueries:
+    params = [False, True]
+    param_names = ['custom_metaclass']
+
+    def setup(self, custom_metaclass):
+        cls = (_ClassMeta('PatternNode', (Basic,), {'label': 0})
+               if custom_metaclass else Basic)
+        self.pattern = cls
+        self.source = cls(Symbol('class_pattern_query_x'))
+        assert self.source.has(self.pattern)
+        assert self.source.has_free(self.pattern)
+
+    def time_has(self, custom_metaclass):
+        self.source.has(self.pattern)
+
+    def time_has_free(self, custom_metaclass):
+        self.source.has_free(self.pattern)
+
+
+class TimeClassPatternAliases:
+    def setup(self):
+        self.source = Basic(Symbol('class_alias_query_x'))
+        self.patterns = [_ClassMeta('PatternAlias', (Basic,), {'label': 0})
+                         for _ in range(128)]
+        assert all(not self.source.has(pattern) and not self.source.has_free(pattern)
+                   for pattern in self.patterns)
+
+    def time_has_aliases(self):
+        for pattern in self.patterns:
+            self.source.has(pattern)
+
+    def time_has_free_aliases(self):
+        for pattern in self.patterns:
+            self.source.has_free(pattern)
+
+
 _aliased_rationals = tuple(_ClassMeta('PassiveRational', (Rational,),
     {'label': 0, '__module__': __name__}) for _ in range(2))
 

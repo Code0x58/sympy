@@ -6,11 +6,11 @@ from collections.abc import Mapping, Iterable
 from decimal import Decimal
 from fractions import Fraction
 from itertools import repeat, zip_longest
-from functools import cmp_to_key
+from functools import cmp_to_key, partial
 from typing import TYPE_CHECKING, overload
 
 from .assumptions import _prepare_class_assumptions
-from .cache import cacheit, cacheit_by_identity
+from .cache import cacheit, cacheit_by_identity, _ReceiverIdentityKey
 from .sympify import _sympify, sympify, SympifyError, _external_converter
 from .sorting import default_sort_key, ordered
 from .kind import Kind, UndefinedKind
@@ -378,6 +378,41 @@ def _free_symbol_names(expr):
     """Collect the available names of free-symbol objects."""
     return {name for symbol in expr.free_symbols
             if (name := getattr(symbol, 'name', None)) is not None}
+
+
+class _QueryIdentityKey(_ReceiverIdentityKey):
+    """Keep pattern types and class values distinct for structural queries."""
+    __slots__ = ('patterns', 'types', 'identities', '_pattern_hash')
+
+    def __init__(self, value, *patterns):
+        super().__init__(value)
+        self.patterns = patterns
+        self.types = tuple(map(type, patterns))
+        self.identities = tuple((id(cls), id(pattern) if issubclass(cls, type) else 0)
+                               for cls, pattern in zip(self.types, patterns))
+        self._pattern_hash = hash(self.identities)
+
+    def __eq__(self, other):
+        return super().__eq__(other) and self.identities == other.identities
+
+    def __hash__(self):
+        return super().__hash__() ^ self._pattern_hash
+
+    def __reduce__(self):
+        return type(self), (self.value, *self.patterns)
+
+
+def _query_key(value, *patterns):
+    # Ordinary metaclasses make the cache's type checks strict. Class values
+    # with custom metaclasses also need explicit identity checks.
+    for pattern in patterns:
+        cls = type(pattern)
+        if type(cls) is not type or cls is not type and issubclass(cls, type):
+            return _QueryIdentityKey(value, *patterns)
+    return _ReceiverIdentityKey(value)
+
+
+_cacheit_query = partial(cacheit_by_identity, key=_query_key)
 
 
 def as_Basic(expr):
@@ -1792,7 +1827,7 @@ class Basic(Printable):
                 return self.func(*args), True
         return self, False
 
-    @cacheit_by_identity
+    @_cacheit_query
     def has(self, *patterns):
         """
         Test whether any subexpression matches any of the patterns.
@@ -1868,7 +1903,7 @@ class Basic(Printable):
             raise TypeError('expecting set argument')
         return any(a in s for a in iterfreeargs(self))
 
-    @cacheit_by_identity
+    @_cacheit_query
     def has_free(self, *patterns):
         """Return True if self has object(s) ``x`` as a free expression
         else False.
@@ -1906,7 +1941,7 @@ class Basic(Printable):
                 non-Basic iterable. Don't forget to unpack
                 iterables: `eq.has_free(*patterns)`'''))
         # try quick test first
-        s = set(patterns)
+        s = {pattern for pattern in patterns if not isinstance(pattern, type)}
         rv = self.has_xfree(s)
         if rv:
             return rv
@@ -1915,11 +1950,11 @@ class Basic(Printable):
 
     def _has(self, iterargs, *patterns):
         # separate out types and unhashable objects
-        type_set = set()  # only types
+        type_patterns = {}
         p_set = set()  # hashable non-types
         for p in patterns:
             if isinstance(p, type) and issubclass(p, Basic):
-                type_set.add(p)
+                type_patterns[id(p)] = p
                 continue
             if not isinstance(p, Basic):
                 try:
@@ -1928,7 +1963,7 @@ class Basic(Printable):
                     continue  # Basic won't have this in it
             p_set.add(p)  # fails if object defines __eq__ but
                           # doesn't define __hash__
-        types = tuple(type_set)   #
+        types = tuple(type_patterns.values())   #
         for i in iterargs(self):  #
             if i in p_set:        # <--- here, too
                 return True
@@ -1938,8 +1973,8 @@ class Basic(Printable):
         # use matcher if defined, e.g. operations defines
         # matcher that checks for exact subset containment,
         # (x + y + 1).has(x + 1) -> True
-        for i in p_set - type_set:  # types don't have matchers
-            if not hasattr(i, '_has_matcher'):
+        for i in p_set:
+            if isinstance(i, type) or not hasattr(i, '_has_matcher'):
                 continue
             match = i._has_matcher()
             if any(match(arg) for arg in iterargs(self)):
