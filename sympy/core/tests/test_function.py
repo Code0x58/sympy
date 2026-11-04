@@ -2302,6 +2302,17 @@ def test_Subs_multiple_symbol_point_scope():
     assert result.free_symbols == {y}
 
 
+@pytest.mark.parametrize('body', [sin(x + y), exp(x + y)])
+@pytest.mark.parametrize('replacement', [x, y, x + y])
+@pytest.mark.parametrize('simultaneous', [False, True])
+@pytest.mark.parametrize('variables, points', [((x, y), (y, 1)), ((y, x), (1, y))])
+def test_Subs_multiple_symbol_evaluator_scope(body, replacement, simultaneous, variables, points):
+    source = Subs(body + z, variables, points)
+    result = source.subs(z, replacement, simultaneous=simultaneous)
+    assert result.doit() == source.doit().subs(z, replacement)
+    assert result.free_symbols == source.free_symbols - {z} | replacement.free_symbols
+
+
 @pytest.mark.parametrize('variables, points', [
     ((x, y), (y, 1)),
     ((x, y, t), (y, t, 1)),
@@ -2422,13 +2433,13 @@ def test_Subs_multiple_symbols_preserve_lambda_subclass():
 def test_Subs_multiple_symbols_preserve_binding_domain():
     point = Symbol('A', commutative=False)
     source = Subs(f(x, y) + z, (x, y), (point, 1))
-    assert source.subs(z, x).doit() == f(point, 1) + point
+    assert source.subs(z, x).doit() == source.doit().subs(z, x) == f(point, 1) + x
 
 
 def test_Subs_multiple_symbols_preserve_dependent_domain():
     a, b = symbols('A B', commutative=False)
     source = Subs(x*z, (x, y), (y, b))
-    assert source.subs(z, a*x).doit() == b**2*a
+    assert source.subs(z, a*x).doit() == source.doit().subs(z, a*x) == a*b*x
 
 
 def test_Subs_multiple_symbol_scope_context():
@@ -2696,7 +2707,7 @@ def test_Subs_multiple_symbols_preserve_atom_operators():
 
     atom = NamedPower()
     source = Subs(atom**x + y + z, (x, y), (2, 1))
-    assert source.subs(z, x).doit() == atom**2 + 3
+    assert source.subs(z, x).doit() == source.doit().subs(z, x) == atom**2 + 1 + x
 
 
 @pytest.mark.parametrize('kind', ['atom', 'function', 'metaclass'])

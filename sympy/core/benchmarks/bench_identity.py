@@ -263,6 +263,25 @@ class _QueryPattern(Basic):
         return lambda node: False
 
 
+class TimeMultipleBindingScope:
+    params = ['sin', 'noncommutative']
+    param_names = ['kind']
+
+    def setup(self, kind):
+        x, y, z = map(Symbol, ('scope_x', 'scope_y', 'scope_z'))
+        if kind == 'sin':
+            self.source = Subs(sin(x + y) + z, (x, y), (y, 1))
+        else:
+            function = Function('scope_function')
+            self.source = Subs(function(x, y) + z, (x, y),
+                               (Symbol('scope_A', commutative=False), 1))
+        self.old, self.new = z, x
+        assert isinstance(self.source._eval_subs(self.old, self.new), Subs)
+
+    def time_eval_subs(self, kind):
+        self.source._eval_subs(self.old, self.new)
+
+
 class TimeMultipleValuePatterns:
     params = [[False, True], [False, True]]
     param_names = ['mixed_types', 'free']

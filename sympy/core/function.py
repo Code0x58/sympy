@@ -3041,6 +3041,10 @@ class Subs(Expr):
                     safe = (not _get_postprocessors_for_type(Lambda)
                             and all(can_rename(variable, replacement) for variable in new.variables))
                 if not safe:
+                    # All active bindings can finish before inserting a free replacement.
+                    if (len(active) == len(v) and _is_ordinary_symbol(old)
+                            and old in self.free_symbols):
+                        return Subs(self, old, new)
                     return self.func(subs(self.expr), v, [subs(point) for point in pt])
             dummies = {variable: Dummy(variable.name, **variable.assumptions0)
                        for _, variable in active}
