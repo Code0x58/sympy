@@ -1170,6 +1170,43 @@ def test_structural_query_pattern_type_identity():
                 pattern is first for pattern in patterns]
 
 
+def test_structural_query_multiple_value_patterns():
+    calls = []
+    for class_hash in (None, lambda cls: 0):
+        class Meta(type):
+            __hash__ = class_hash
+
+            def __eq__(cls, other):
+                return type(cls) is type(other)
+
+        class Pattern(Basic):
+            def __eq__(self, other):
+                return isinstance(other, Pattern)
+
+            def __hash__(self):
+                return 0
+
+            def _has_matcher(self):
+                calls.append(type(self))
+                return lambda node: self.accepts
+
+        rejected_type = Meta('RejectedPattern', (Pattern,), {'accepts': False})
+        accepted_type = Meta('AcceptedPattern', (Pattern,), {'accepts': True})
+        rejected, alias, accepted = rejected_type(), rejected_type(), accepted_type()
+        assert rejected == accepted and hash(rejected) == hash(accepted)
+        assert rejected_type == accepted_type and rejected_type is not accepted_type
+        for source in (Basic(), Basic(Basic()), Lambda(Symbol('bound'), Basic())):
+            for name in ('has', 'has_free'):
+                method = getattr(source, name)
+                for patterns in ((rejected, accepted), (accepted, rejected),
+                                 (rejected, alias, accepted)):
+                    clear_cache()
+                    assert method(*patterns)
+                calls.clear()
+                assert not getattr(Basic, name).__wrapped__(source, rejected, alias)
+                assert len(calls) == 1 and calls[0] is rejected_type
+
+
 def test_structural_query_value_and_class_patterns():
     class Meta(type):
         def __eq__(cls, other):

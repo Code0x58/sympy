@@ -10,7 +10,7 @@ from functools import cmp_to_key, partial
 from typing import TYPE_CHECKING, overload
 
 from .assumptions import _prepare_class_assumptions
-from .cache import cacheit, cacheit_by_identity, _ReceiverIdentityKey
+from .cache import cacheit, cacheit_by_identity, _IdentityKey, _ReceiverIdentityKey
 from .sympify import _sympify, sympify, SympifyError, _external_converter
 from .sorting import default_sort_key, ordered
 from .kind import Kind, UndefinedKind
@@ -18,7 +18,7 @@ from ._print_helpers import Printable
 
 from sympy.utilities.decorator import deprecated
 from sympy.utilities.exceptions import sympy_deprecation_warning
-from sympy.utilities.iterables import iterable, numbered_symbols, NotIterable
+from sympy.utilities.iterables import iterable, numbered_symbols, NotIterable, sift
 from sympy.utilities.misc import filldedent, func_name
 
 
@@ -1952,6 +1952,7 @@ class Basic(Printable):
         # separate out types and unhashable objects
         type_patterns = {}
         p_set = set()  # hashable non-types
+        value_patterns = []
         for p in patterns:
             if isinstance(p, type) and issubclass(p, Basic):
                 type_patterns[id(p)] = p
@@ -1963,6 +1964,7 @@ class Basic(Printable):
                     continue  # Basic won't have this in it
             p_set.add(p)  # fails if object defines __eq__ but
                           # doesn't define __hash__
+            value_patterns.append(p)
         types = tuple(type_patterns.values())   #
         for i in iterargs(self):  #
             if i in p_set:        # <--- here, too
@@ -1973,7 +1975,12 @@ class Basic(Printable):
         # use matcher if defined, e.g. operations defines
         # matcher that checks for exact subset containment,
         # (x + y + 1).has(x + 1) -> True
-        for i in p_set:
+        matcher_patterns = p_set
+        if len(value_patterns) != len(p_set):
+            # Equal values can have different matchers on distinct actual types.
+            groups = sift(value_patterns, lambda pattern: _IdentityKey(type(pattern)))
+            matcher_patterns = (pattern for group in groups.values() for pattern in set(group))
+        for i in matcher_patterns:
             if isinstance(i, type) or not hasattr(i, '_has_matcher'):
                 continue
             match = i._has_matcher()

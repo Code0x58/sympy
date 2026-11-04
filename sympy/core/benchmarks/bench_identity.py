@@ -5,7 +5,7 @@ from __future__ import annotations
 from sympy import Basic, Expr, Float, Function, Rational, S, Subs, Symbol, Tuple, default_sort_key, sin
 from sympy.core.cache import clear_cache
 from sympy.core.function import AppliedUndef, UndefinedFunction
-from sympy.core.traversal import preorder_traversal, postorder_traversal
+from sympy.core.traversal import iterargs, iterfreeargs, preorder_traversal, postorder_traversal
 
 
 class _Label:
@@ -250,6 +250,33 @@ class _ClassMeta(type):
 
     def __gt__(cls, other):
         return cls.label > other.label
+
+
+class _QueryPattern(Basic):
+    def __eq__(self, other):
+        return isinstance(other, _QueryPattern)
+
+    def __hash__(self):
+        return 0
+
+    def _has_matcher(self):
+        return lambda node: False
+
+
+class TimeMultipleValuePatterns:
+    params = [[False, True], [False, True]]
+    param_names = ['mixed_types', 'free']
+
+    def setup(self, mixed_types, free):
+        classes = ([_ClassMeta('PatternAlias', (_QueryPattern,), {'label': 0})
+                    for _ in range(2)] if mixed_types else [_QueryPattern]*2)
+        self.patterns = tuple(cls() for cls in classes)
+        self.source = Basic(Symbol('multiple_pattern_query_x'))
+        self.traversal = iterfreeargs if free else iterargs
+        assert not self.source._has(self.traversal, *self.patterns)
+
+    def time_has(self, mixed_types, free):
+        self.source._has(self.traversal, *self.patterns)
 
 
 class TimeReceiverQueryCache:

@@ -79,6 +79,13 @@ class _ReceiverIdentityKey(_IdentityKey):
                 and self.owner_type is other.owner_type)
 
 
+def _is_unhashable_error(error):
+    """Recognize standard unhashable-key error messages without user hooks."""
+    return (type(error) is TypeError and bool(error.args)
+            and type(error.args[0]) is str
+            and error.args[0].startswith('unhashable type:'))
+
+
 def __cacheit(maxsize, *, by_identity=False):
     """caching decorator.
 
@@ -117,8 +124,7 @@ def __cacheit(maxsize, *, by_identity=False):
                 try:
                     return cfunc(_identity_key(*args), *args[1:], **kwargs)
                 except TypeError as e:
-                    if (not e.args or type(e.args[0]) is not str
-                            or not e.args[0].startswith('unhashable type:')):
+                    if not _is_unhashable_error(e):
                         raise
                     return func(*args, **kwargs)
         else:
@@ -127,8 +133,7 @@ def __cacheit(maxsize, *, by_identity=False):
                 try:
                     retval = cfunc(*args, **kwargs)
                 except TypeError as e:
-                    if (not e.args or type(e.args[0]) is not str
-                            or not e.args[0].startswith('unhashable type:')):
+                    if not _is_unhashable_error(e):
                         raise
                     retval = func(*args, **kwargs)
                 return retval

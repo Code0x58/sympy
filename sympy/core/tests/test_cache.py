@@ -225,6 +225,53 @@ def test_cacheit_nonstring_typeerror(monkeypatch):
                         assert caught.value is error
 
 
+def test_cacheit_typeerror_subclass(monkeypatch):
+    class CacheTypeError(TypeError):
+        pass
+
+    class OpaqueTypeError(TypeError):
+        @property
+        def args(self):
+            raise AssertionError('exception arguments must not supply cache hooks')
+
+    for mode in ('yes', 'no', 'debug'):
+        for size in ('0', '2', 'None'):
+            monkeypatch.setenv('SYMPY_USE_CACHE', mode)
+            monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
+            scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+            for name in ('cacheit', 'cacheit_by_identity'):
+                for error_type in (CacheTypeError, OpaqueTypeError):
+                    error = error_type('unhashable type: intentional')
+                    calls = []
+
+                    @scope[name]
+                    def fail(receiver):
+                        calls.append(receiver)
+                        raise error
+
+                    receiver = object()
+                    with raises(TypeError) as caught:
+                        fail(receiver)
+                    assert caught.value is error
+                    assert calls == [receiver]
+
+                    class BadHash:
+                        def __hash__(self):
+                            raise error
+
+                    @scope[name]
+                    def identify(receiver):
+                        return id(receiver)
+
+                    receiver = BadHash()
+                    if mode == 'no' or size == '0':
+                        assert identify(receiver) == id(receiver)
+                    else:
+                        with raises(TypeError) as caught:
+                            identify(receiver)
+                        assert caught.value is error
+
+
 def test_cachit_exception():
     # Make sure the cache doesn't call functions multiple times when they
     # raise TypeError
