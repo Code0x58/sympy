@@ -1054,6 +1054,13 @@ class Mul(Expr, AssocOp):
         args = self.args
         m = len(args)
         if isinstance(n, (int, Integer)):
+            if n > 1:
+                from .exprtools import Factors
+                commutative, noncommutative = self.args_cnc()
+                scalar = Mul(*commutative)
+                combined = Factors(scalar).as_expr()
+                if combined != scalar:
+                    return reduce(operator.mul, [combined] + noncommutative, S.One).diff((s, n))
             # https://en.wikipedia.org/wiki/General_Leibniz_rule#More_than_two_factors
             terms = []
             from sympy.ntheory.multinomial import multinomial_coefficients_iterator
