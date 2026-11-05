@@ -1006,8 +1006,32 @@ class Mul(Expr, AssocOp):
             if d:
                 # Note: reduce is used in step of Mul as Mul is unable to
                 # handle subtypes and operation priority:
-                terms.append(reduce(lambda x, y: x*y, (args[:i] + [d] + args[i + 1:]), S.One))
+                term = reduce(lambda x, y: x*y, (args[:i] + [d] + args[i + 1:]), S.One)
+                terms.append(self._cancel_derivative_powers(term))
         return Add.fromiter(terms)
+
+    @staticmethod
+    def _cancel_derivative_powers(term):
+        """Cancel whole base factors in product-rule terms."""
+        if term.is_Mul and term.is_commutative:
+            for factor in term.args:
+                if not (factor.is_Pow and (factor.base.is_Mul or factor.base.is_Pow)):
+                    continue
+                constant, _ = factor.exp.as_coeff_Add()
+                if not (constant.is_negative and constant.is_finite):
+                    continue
+                shift = -constant.floor()
+                args = Mul.make_args(term)
+                if factor not in args:
+                    continue
+                rest = Mul(*(arg for arg in args if arg != factor))
+                remainder = rest.extract_multiplicatively(factor.base**shift)
+                if remainder is None and shift != 1:
+                    shift = S.One
+                    remainder = rest.extract_multiplicatively(factor.base)
+                if remainder is not None:
+                    term = remainder*factor.base**(factor.exp + shift)
+        return term
 
     @cacheit
     def _eval_derivative_n_times(self, s, n):
@@ -1026,7 +1050,7 @@ class Mul(Expr, AssocOp):
             from sympy.ntheory.multinomial import multinomial_coefficients_iterator
             for kvals, c in multinomial_coefficients_iterator(m, n):
                 p = Mul(*[arg.diff((s, k)) for k, arg in zip(kvals, args)])
-                terms.append(c * p)
+                terms.append(c * self._cancel_derivative_powers(p))
             return Add(*terms)
         from sympy.concrete.summations import Sum
         from sympy.functions.combinatorial.factorials import factorial

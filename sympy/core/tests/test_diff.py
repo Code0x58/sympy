@@ -105,6 +105,14 @@ def test_diff_pow_at_zero():
     assert (x*sqrt(x**2)).diff(x).subs(x, 0) == 0
 
 
+def test_diff_pow_product_at_zero():
+    p = Symbol('p', positive=True)
+    assert (x*(x**2)**(1/(p + 1))).diff(x).subs(x, 0) == 0
+    assert (x*(x**2)**a).diff(x).subs(a, S.Half).subs(x, 0) == 0
+    assert (x**3*(x**2)**a).diff(x, 2).subs(a, S.Half).subs(x, 0) == 0
+    assert (x*(x**2)**a).diff(x).subs(a, -1).subs(x, 0) is S.ComplexInfinity
+
+
 def test_diff_no_eval_derivative():
     class My(Expr):
         def __new__(cls, x):
