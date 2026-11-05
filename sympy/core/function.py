@@ -3028,15 +3028,23 @@ class Subs(Expr):
                          or old in self.free_symbols and not self._comparison_key[0])):
                 return Subs(self, old, new)
             if len(v) > 1:
+                # An active symbol replacement cannot introduce an inactive target.
+                if (_is_ordinary_symbol(old) and old in free
+                        and _is_ordinary_symbol(new)
+                        and any(new == variable for _, variable in active)):
+                    return Subs(self, old, new)
+
                 def can_rename(variable, *args, point=S.One):
                     # The extra occurrence makes the proof inspect all hooks.
                     request = Subs(Tuple(*args, variable, sympify=False), variable, point)
                     return request._comparison_key[0]
 
                 replacement = new.expr if type(new) is Lambda else new
-                safe = all(can_rename(variable, self.expr, *pt, old, replacement,
-                                      point=self.point[i])
-                           for i, variable in enumerate(v))
+                # Target classes and point hooks still participate in the proof;
+                # only active bindings are renamed.
+                safe = all(
+                    can_rename(variable, self.expr, *v, *pt, old, replacement, point=self.point[i])
+                    for i, variable in active)
                 if safe and type(new) is Lambda:
                     safe = (not _get_postprocessors_for_type(Lambda)
                             and all(can_rename(variable, replacement) for variable in new.variables))

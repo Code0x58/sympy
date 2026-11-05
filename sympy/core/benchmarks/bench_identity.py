@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from sympy import Basic, Expr, Float, Function, Rational, S, Subs, Symbol, Tuple, default_sort_key, sin
+from sympy import (Basic, Dummy, Expr, Float, Function, Rational, S, Subs,
+                   Symbol, Tuple, default_sort_key, sin)
 from sympy.core.cache import clear_cache
 from sympy.core.function import AppliedUndef, UndefinedFunction
 from sympy.core.traversal import iterargs, iterfreeargs, preorder_traversal, postorder_traversal
@@ -264,22 +265,41 @@ class _QueryPattern(Basic):
 
 
 class TimeMultipleBindingScope:
-    params = ['sin', 'noncommutative']
+    params = ['sin', 'noncommutative', 'inactive', 'postprocessor']
     param_names = ['kind']
 
     def setup(self, kind):
         x, y, z = map(Symbol, ('scope_x', 'scope_y', 'scope_z'))
         if kind == 'sin':
             self.source = Subs(sin(x + y) + z, (x, y), (y, 1))
+        elif kind == 'postprocessor':
+            self.source = Subs(x*z, (x, Dummy('scope_unused')), (1, 0))
+            mapping = Basic._constructor_postprocessor_mapping
+            self._had_dummy_processors = Dummy in mapping
+            self._dummy_processors = mapping.get(Dummy)
+            mapping[Dummy] = {'Mul': [lambda expr: S.Zero]}
+            clear_cache()
         else:
             function = Function('scope_function')
-            self.source = Subs(function(x, y) + z, (x, y),
-                               (Symbol('scope_A', commutative=False), 1))
+            point = Symbol('scope_A', commutative=False)
+            if kind == 'noncommutative':
+                self.source = Subs(function(x, y) + z, (x, y), (point, 1))
+            else:
+                self.source = Subs(function(x) + z, (x, y), (0, point))
         self.old, self.new = z, x
         assert isinstance(self.source._eval_subs(self.old, self.new), Subs)
 
     def time_eval_subs(self, kind):
         self.source._eval_subs(self.old, self.new)
+
+    def teardown(self, kind):
+        if kind == 'postprocessor':
+            mapping = Basic._constructor_postprocessor_mapping
+            if self._had_dummy_processors:
+                mapping[Dummy] = self._dummy_processors
+            else:
+                del mapping[Dummy]
+            clear_cache()
 
 
 class TimeMultipleValuePatterns:

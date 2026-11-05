@@ -2313,6 +2313,55 @@ def test_Subs_multiple_symbol_evaluator_scope(body, replacement, simultaneous, v
     assert result.free_symbols == source.free_symbols - {z} | replacement.free_symbols
 
 
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('dependent', [False, True])
+@pytest.mark.parametrize('replacement', [x, x + y])
+@pytest.mark.parametrize('simultaneous', [False, True])
+@pytest.mark.parametrize('noncommutative', [False, True])
+def test_Subs_inactive_symbol_point_domain(
+        reverse, dependent, replacement, simultaneous, noncommutative):
+    unused = y if noncommutative else Symbol('y', positive=True)
+    point = Symbol('A', commutative=False) if noncommutative else S.One
+    if dependent:
+        point *= x
+    replacement = replacement.xreplace({y: unused})
+    variables, points = ((unused, x), (point, 0)) if reverse else ((x, unused), (0, point))
+    source = Subs(f(x) + z, variables, points)
+    result = source.subs(z, replacement, simultaneous=simultaneous)
+    inactive_point = point.subs(x, 0) if reverse else point
+    expected = f(0) + replacement.subs(unused, inactive_point)
+    assert result.doit() == expected
+    assert result.free_symbols == source.free_symbols - {z} | {x}
+    assert result.has_free(x)
+    assert result.has_xfree({x})
+
+
+@pytest.mark.parametrize('dummy', [False, True])
+@pytest.mark.thread_unsafe(reason='changes constructor postprocessors')
+def test_Subs_multiple_symbols_dummy_postprocessor(monkeypatch, dummy):
+    unused = Dummy('unused') if dummy else y
+    source = Subs(x*z, (x, unused), (1, 0))
+    complete = Subs(x*y*z, (x, y), (1, 2))
+    calls = []
+
+    def process(expr):
+        calls.append(expr)
+        return S.Zero
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setitem(Basic._constructor_postprocessor_mapping, Dummy, {'Mul': [process]})
+            clear_cache()
+            for request, expected in ((source, x), (complete, 2*x)):
+                result = request.subs(z, x)
+                assert result.doit() == expected
+                assert x in result.free_symbols
+                assert not calls
+            assert source.subs(z, unused).doit() == 0
+    finally:
+        clear_cache()
+
+
 @pytest.mark.parametrize('variables, points', [
     ((x, y), (y, 1)),
     ((x, y, t), (y, t, 1)),
