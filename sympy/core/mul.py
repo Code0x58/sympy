@@ -1013,9 +1013,18 @@ class Mul(Expr, AssocOp):
     @staticmethod
     def _cancel_derivative_powers(term):
         """Cancel whole base factors in product-rule terms."""
+        if term.is_Mul and not term.is_commutative:
+            commutative, noncommutative = term.args_cnc()
+            scalar = Mul(*commutative)
+            reduced = Mul._cancel_derivative_powers(scalar)
+            if reduced != scalar:
+                return reduce(operator.mul, [reduced] + noncommutative, S.One)
+            return term
         if term.is_Mul and term.is_commutative:
+            if term.args[0].is_finite is False:
+                return term
             for factor in term.args:
-                if not (factor.is_Pow and (factor.base.is_Mul or factor.base.is_Pow)):
+                if not factor.is_Pow:
                     continue
                 constant, _ = factor.exp.as_coeff_Add()
                 if not (constant.is_negative and constant.is_finite):

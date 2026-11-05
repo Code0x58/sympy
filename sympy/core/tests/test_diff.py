@@ -109,8 +109,18 @@ def test_diff_pow_product_at_zero():
     p = Symbol('p', positive=True)
     assert (x*(x**2)**(1/(p + 1))).diff(x).subs(x, 0) == 0
     assert (x*(x**2)**a).diff(x).subs(a, S.Half).subs(x, 0) == 0
+    assert (x*(x*(x + 1))**a).diff(x).subs(a, S.Half).subs(x, 0) == 0
+    assert (x*x**a).diff(x).subs({a: S.Half, x: 0}, simultaneous=True) == 0
     assert (x**3*(x**2)**a).diff(x, 2).subs(a, S.Half).subs(x, 0) == 0
     assert (x*(x**2)**a).diff(x).subs(a, -1).subs(x, 0) is S.ComplexInfinity
+
+
+def test_diff_pow_product_noncommutative():
+    A = Symbol('A', commutative=False)
+    B = Symbol('B', commutative=False)
+    derivative = (A*x*x**a*B).diff(x).subs(a, S.Half)
+    assert derivative.subs(x, 0) == 0
+    assert derivative.subs(x, 1) == Rational(3, 2)*A*B
 
 
 def test_diff_no_eval_derivative():

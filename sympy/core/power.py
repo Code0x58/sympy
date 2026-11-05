@@ -1214,9 +1214,12 @@ class Pow(Expr):
         dbase = self.base.diff(s)
         dexp = self.exp.diff(s)
 
-        # Cancel base factors first when the exponent would produce a reciprocal power.
-        if dexp == 0 and not (self.exp - 1).is_negative:
-            return dbase * self.exp * self.base**(self.exp - 1)
+        if dexp == 0:
+            reduced_exp = self.exp - 1
+            # Keep cancellation available for unresolved powers of products or powers.
+            if self.exp.is_integer or reduced_exp.is_nonnegative or (
+                    not reduced_exp.is_negative and not (self.base.is_Mul or self.base.is_Pow)):
+                return dbase * self.exp * self.base**reduced_exp
 
         return self * (dexp * log(self.base) + dbase * self.exp/self.base)
 

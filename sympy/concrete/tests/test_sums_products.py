@@ -704,6 +704,9 @@ def test_diff():
         Sum(x*y, (x, 1, 3), (a, 2, 5)).doit().diff(y) == 24
     assert Sum(x, (x, 1, 2)).diff(y) == 0
     assert Sum(x**(n + 1), (n, 0, 1)).diff(x).doit().subs(x, 0) == 1
+    assert Sum(c*(x*y)**k, (k, 0, 2)).diff(x).doit().subs(x, 0) == c*y
+    assert Sum(x*(x*(x + 1))**k, (k, 0, 1)).diff(x).doit().subs(x, -1) == 2
+    assert Sum(x*(x*(x + 1))**k, (k, 0, oo)).diff(x).doit().subs(x, -1) == 2
 
 
 def test_hypersum():
