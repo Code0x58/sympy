@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sympy import (Basic, Dummy, Expr, Float, Function, Rational, S, Subs,
+from sympy import (Basic, Dummy, Expr, Float, Function, Lambda, Rational, S, Subs,
                    Symbol, Tuple, default_sort_key, sin)
 from sympy.core.cache import clear_cache
 from sympy.core.function import AppliedUndef, UndefinedFunction
@@ -265,15 +265,27 @@ class _QueryPattern(Basic):
 
 
 class TimeMultipleBindingScope:
-    params = ['sin', 'noncommutative', 'inactive', 'postprocessor']
+    params = ['sin', 'noncommutative', 'inactive', 'postprocessor',
+              'postprocessor_compound', 'postprocessor_inactive', 'postprocessor_definition']
     param_names = ['kind']
 
     def setup(self, kind):
         x, y, z = map(Symbol, ('scope_x', 'scope_y', 'scope_z'))
+        self.old, self.new = z, x
         if kind == 'sin':
             self.source = Subs(sin(x + y) + z, (x, y), (y, 1))
-        elif kind == 'postprocessor':
-            self.source = Subs(x*z, (x, Dummy('scope_unused')), (1, 0))
+        elif kind.startswith('postprocessor'):
+            if kind == 'postprocessor_definition':
+                function = Function('scope_function')
+                self.source = Subs(function(x), (x, y), (1, 0))
+                self.old, self.new = function, Lambda(z, x*z + y)
+            elif kind == 'postprocessor_inactive':
+                self.source = Subs(x*z, (x, y), (1, 0))
+                self.new = x + y
+            else:
+                self.source = Subs(x*z, (x, Dummy('scope_unused')), (1, 0))
+                if kind == 'postprocessor_compound':
+                    self.new = x + 1
             mapping = Basic._constructor_postprocessor_mapping
             self._had_dummy_processors = Dummy in mapping
             self._dummy_processors = mapping.get(Dummy)
@@ -286,14 +298,13 @@ class TimeMultipleBindingScope:
                 self.source = Subs(function(x, y) + z, (x, y), (point, 1))
             else:
                 self.source = Subs(function(x) + z, (x, y), (0, point))
-        self.old, self.new = z, x
         assert isinstance(self.source._eval_subs(self.old, self.new), Subs)
 
     def time_eval_subs(self, kind):
         self.source._eval_subs(self.old, self.new)
 
     def teardown(self, kind):
-        if kind == 'postprocessor':
+        if kind.startswith('postprocessor'):
             mapping = Basic._constructor_postprocessor_mapping
             if self._had_dummy_processors:
                 mapping[Dummy] = self._dummy_processors

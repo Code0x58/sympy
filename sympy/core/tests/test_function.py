@@ -2337,10 +2337,13 @@ def test_Subs_inactive_symbol_point_domain(
 
 
 @pytest.mark.parametrize('dummy', [False, True])
+@pytest.mark.parametrize('replacement', [x, x + 1, x + y, f(x), x*z])
+@pytest.mark.parametrize('reverse', [False, True])
 @pytest.mark.thread_unsafe(reason='changes constructor postprocessors')
-def test_Subs_multiple_symbols_dummy_postprocessor(monkeypatch, dummy):
+def test_Subs_multiple_symbols_dummy_postprocessor(monkeypatch, dummy, replacement, reverse):
     unused = Dummy('unused') if dummy else y
-    source = Subs(x*z, (x, unused), (1, 0))
+    variables, points = ((unused, x), (0, 1)) if reverse else ((x, unused), (1, 0))
+    source = Subs(x*z, variables, points)
     complete = Subs(x*y*z, (x, y), (1, 2))
     calls = []
 
@@ -2352,12 +2355,43 @@ def test_Subs_multiple_symbols_dummy_postprocessor(monkeypatch, dummy):
         with monkeypatch.context() as patch:
             patch.setitem(Basic._constructor_postprocessor_mapping, Dummy, {'Mul': [process]})
             clear_cache()
-            for request, expected in ((source, x), (complete, 2*x)):
-                result = request.subs(z, x)
+            expected = replacement if dummy else replacement.subs(y, 0)
+            for request, expected in ((Subs(x*z, x, 1), replacement),
+                                      (source, expected), (complete, 2*replacement)):
+                result = request.subs(z, replacement)
                 assert result.doit() == expected
                 assert x in result.free_symbols
                 assert not calls
             assert source.subs(z, unused).doit() == 0
+    finally:
+        clear_cache()
+
+
+@pytest.mark.parametrize('definition', [False, True])
+@pytest.mark.thread_unsafe(reason='changes constructor postprocessors')
+def test_Subs_dummy_postprocessor_fresh_symbols(monkeypatch, definition):
+    first, second, third = symbols('_0:3')
+    if definition:
+        source = Subs(f(x) + first, (x, y), (1, second))
+        old, replacement = f, Lambda(third, x*third + y)
+        expected = x + first + second
+    else:
+        source = Subs(x*z + first, (x, y), (1, second))
+        old, replacement = z, x + y + third
+        expected = x + first + second + third
+    calls = []
+
+    def process(expr):
+        calls.append(expr)
+        return S.Zero
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setitem(Basic._constructor_postprocessor_mapping, Dummy, {'Mul': [process]})
+            clear_cache()
+            result = source.subs(old, replacement)
+            assert result.doit() == expected
+            assert not calls
     finally:
         clear_cache()
 
@@ -2417,7 +2451,8 @@ def test_Subs_point_edit_preserves_evaluator_binding():
     assert source.subs(z, x).doit() == 0
 
 
-def test_Subs_multiple_symbols_preserve_opaque_evaluator():
+@pytest.mark.parametrize('count', [1, 2])
+def test_Subs_multiple_symbols_preserve_opaque_evaluator(count):
     class Named(Expr):
         def doit(self, **hints):
             return S.Zero if self.args == (x,) else S.One
@@ -2426,7 +2461,7 @@ def test_Subs_multiple_symbols_preserve_opaque_evaluator():
         def doit(self, **hints):
             return S.Zero
 
-    source = Subs(Named(x) + z, (x, y), (0, 1))
+    source = Subs(Named(x) + z, (x, y)[:count], (0, 1)[:count])
     assert source.subs(z, Zero(x)).doit() == 0
 
 

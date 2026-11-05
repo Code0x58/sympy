@@ -3023,7 +3023,7 @@ class Subs(Expr):
             # An ordered request preserves scope without introducing symbols
             # that opaque constructors or postprocessors could evaluate.
             if (type(self) is Subs and len(v) == 1
-                    and _is_ordinary_symbol(old) and _is_ordinary_symbol(new)
+                    and _is_ordinary_symbol(old)
                     and (_get_postprocessors_for_type(Dummy)
                          or old in self.free_symbols and not self._comparison_key[0])):
                 return Subs(self, old, new)
@@ -3040,10 +3040,8 @@ class Subs(Expr):
                     return request._comparison_key[0]
 
                 replacement = new.expr if type(new) is Lambda else new
-                # Target classes and point hooks still participate in the proof;
-                # only active bindings are renamed.
                 safe = all(
-                    can_rename(variable, self.expr, *v, *pt, old, replacement, point=self.point[i])
+                    can_rename(variable, self.expr, *pt, old, replacement, point=self.point[i])
                     for i, variable in active)
                 if safe and type(new) is Lambda:
                     safe = (not _get_postprocessors_for_type(Lambda)
@@ -3054,8 +3052,15 @@ class Subs(Expr):
                             and old in self.free_symbols):
                         return Subs(self, old, new)
                     return self.func(subs(self.expr), v, [subs(point) for point in pt])
-            dummies = {variable: Dummy(variable.name, **variable.assumptions0)
-                       for _, variable in active}
+            if len(v) > 1 and _get_postprocessors_for_type(Dummy):
+                # The proof permits ordinary symbols without invoking Dummy hooks.
+                exclude = {node for arg in (self.expr, *v, *pt, old, new)
+                           for node in iterargs(arg) if isinstance(node, Symbol)}
+                symbols = numbered_symbols('_', exclude=exclude)
+                renamed = {variable: next(symbols) for _, variable in active}
+            else:
+                renamed = {variable: Dummy(variable.name, **variable.assumptions0)
+                           for _, variable in active}
 
             def mask(arg, start):
                 if isinstance(arg, type):
@@ -3063,7 +3068,7 @@ class Subs(Expr):
                 for i, variable in active:
                     if i < start:
                         continue
-                    rule = {variable: dummies[variable]}
+                    rule = {variable: renamed[variable]}
                     # Locally bound occurrences belong to their own node.
                     rule.update((node, node) for node in iterargs(arg)
                         if not isinstance(node, type)
@@ -3082,7 +3087,7 @@ class Subs(Expr):
                 return self.func(self.expr, v, pt)
             if expr == masked and pt == masked_points:
                 return self
-            v = [dummies.get(variable, variable) for variable in v]
+            v = [renamed.get(variable, variable) for variable in v]
             return self.func(expr, v, pt)
         else:
             expr = subs(self.expr)
