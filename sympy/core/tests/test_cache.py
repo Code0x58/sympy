@@ -1,10 +1,12 @@
 from __future__ import annotations
+from functools import partial
+from inspect import unwrap
 from pathlib import Path
 from runpy import run_path
 import sys
 from sympy.core.cache import (USE_CACHE, cacheit, cacheit_by_identity,
     cached_property, clear_cache, lazy_function)
-from sympy.testing.pytest import raises
+from sympy.testing.pytest import XFAIL, raises
 
 def test_cacheit_doc():
     @cacheit
@@ -278,6 +280,189 @@ def test_cacheit_typeerror_subclass(monkeypatch):
                         with raises(TypeError) as caught:
                             identify(receiver)
                         assert caught.value is error
+
+
+def test_cacheit_by_identity_function_typeerror(monkeypatch):
+    for mode in ('yes', 'no', 'debug'):
+        for size in ('0', '2', 'None'):
+            monkeypatch.setenv('SYMPY_USE_CACHE', mode)
+            monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
+            scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+            for kind in ('function', 'partial', 'callable', 'bound'):
+                for arguments in ((object(), 0), ([], 0), (object(), [])):
+                    for recover in (False, True):
+                        calls = []
+                        error = TypeError('unhashable type: intentional')
+
+                        def fail(receiver, value):
+                            calls.append(receiver)
+                            if recover and len(calls) > 1:
+                                return 42
+                            raise error
+
+                        class Failure:
+                            def __call__(self, receiver, value):
+                                return fail(receiver, value)
+
+                            @property
+                            def __code__(self):
+                                raise AssertionError('user code must not be inspected')
+
+                        function = {'function': fail, 'partial': partial(fail),
+                                    'callable': Failure(), 'bound': Failure().__call__}[kind]
+                        cached = scope['cacheit_by_identity'](function)
+                        assert unwrap(cached) is unwrap(function)
+                        with raises(TypeError) as caught:
+                            cached(*arguments)
+                        assert caught.value is error
+                        assert calls == [arguments[0]]
+
+
+def test_cacheit_by_identity_builtin_typeerror(monkeypatch):
+    for mode in ('yes', 'no', 'debug'):
+        for size in ('0', '2', 'None'):
+            monkeypatch.setenv('SYMPY_USE_CACHE', mode)
+            monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
+            scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+            for recover in (False, True):
+                calls = []
+                error = TypeError('unhashable type: intentional')
+
+                class Value:
+                    def __abs__(self):
+                        calls.append(self)
+                        if recover and len(calls) > 1:
+                            return 42
+                        raise error
+
+                cached = scope['cacheit_by_identity'](abs)
+                assert unwrap(cached) is abs
+                value = Value()
+                with raises(TypeError) as caught:
+                    cached(value)
+                assert caught.value is error
+                assert calls == [value]
+
+
+def test_cacheit_hash_function_shared_code(monkeypatch):
+    for mode in ('yes', 'no', 'debug'):
+        for size in ('0', '2', 'None'):
+            monkeypatch.setenv('SYMPY_USE_CACHE', mode)
+            monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
+            scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+            for name in ('cacheit', 'cacheit_by_identity'):
+                def make(result):
+                    def implementation(value):
+                        if result is None:
+                            raise TypeError('unhashable type: intentional')
+                        return result
+                    return implementation
+
+                class Value:
+                    __hash__ = make(None)
+
+                function = make(42)
+                assert Value.__hash__.__code__ is function.__code__
+                assert scope[name](function)(Value()) == 42
+
+
+def test_cacheit_receiver_adaptation_typeerror(monkeypatch):
+    for mode in ('yes', 'no', 'debug'):
+        for size in ('0', '2', 'None'):
+            monkeypatch.setenv('SYMPY_USE_CACHE', mode)
+            monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
+            scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+            for phase in ('construction', 'adaptation'):
+                error = TypeError('unhashable type: intentional')
+                calls = []
+
+                class Key:
+                    def __init__(self, receiver):
+                        if phase == 'construction':
+                            raise error
+
+                    @property
+                    def value(self):
+                        raise error
+
+                def identify(receiver):
+                    calls.append(receiver)
+                    return 42
+
+                cached = scope['cacheit_by_identity'](identify, key=Key)
+                with raises(TypeError) as caught:
+                    cached(object())
+                assert caught.value is error
+                assert not calls
+
+
+def test_cacheit_by_identity_python_lookup_wrapper(monkeypatch):
+    for mode in ('yes', 'no', 'debug'):
+        for size in ('0', '2', 'None'):
+            monkeypatch.setenv('SYMPY_USE_CACHE', mode)
+            monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
+            scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+            make_cache = scope['lru_cache']
+            lookups = []
+
+            def framed_cache(maxsize, typed=False):
+                def decorate(function):
+                    cached = make_cache(maxsize, typed=typed)(function)
+
+                    def lookup(*args, **kwargs):
+                        lookups.append(function)
+                        return cached(*args, **kwargs)
+
+                    lookup.cache_info = cached.cache_info
+                    lookup.cache_clear = cached.cache_clear
+                    return lookup
+                return decorate
+
+            monkeypatch.setitem(scope['__cacheit'].__globals__, 'lru_cache', framed_cache)
+            error = TypeError('unhashable type: intentional')
+            calls = []
+
+            def fail(receiver):
+                calls.append(receiver)
+                raise error
+
+            receiver = object()
+            with raises(TypeError) as caught:
+                scope['cacheit_by_identity'](fail)(receiver)
+            assert caught.value is error
+            assert calls == [receiver]
+
+            class Unhashable:
+                def __hash__(self):
+                    raise error
+
+            def identify(receiver):
+                return 42
+
+            assert scope['cacheit_by_identity'](identify)(Unhashable()) == 42
+            assert bool(lookups) == (mode != 'no')
+
+
+@XFAIL
+def test_cacheit_function_unhashable_typeerror(monkeypatch):
+    monkeypatch.setenv('SYMPY_USE_CACHE', 'yes')
+    monkeypatch.setenv('SYMPY_CACHE_SIZE', '2')
+    scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+    error = TypeError('unhashable type: intentional')
+    calls = []
+
+    @scope['cacheit']
+    def fail(receiver):
+        calls.append(receiver)
+        if len(calls) == 1:
+            raise error
+        return 42
+
+    receiver = object()
+    with raises(TypeError) as caught:
+        fail(receiver)
+    assert caught.value is error
+    assert calls == [receiver]
 
 
 def test_cachit_exception():

@@ -79,11 +79,24 @@ class _ReceiverIdentityKey(_IdentityKey):
                 and self.owner_type is other.owner_type)
 
 
-def _is_unhashable_error(error):
-    """Recognize standard unhashable-key error messages without user hooks."""
-    return (type(error) is TypeError and len(error.args) == 1
+def _is_unhashable_error(error, cached_code=None, lookup_code=None):
+    """Recognize standard key errors, optionally excluding a cached call."""
+    if not (type(error) is TypeError and len(error.args) == 1
             and type(error.args[0]) is str
-            and error.args[0].startswith('unhashable type:'))
+            and error.args[0].startswith('unhashable type:')):
+        return False
+    if cached_code is None:
+        return True
+    trace = error.__traceback__
+    if trace is None:
+        return False
+    origin = trace.tb_next
+    # A Python implementation of lru_cache contributes its own frame.
+    if (origin is not None and lookup_code is not None
+            and lookup_code is not cached_code
+            and origin.tb_frame.f_code is lookup_code):
+        origin = origin.tb_next
+    return origin is None or origin.tb_frame.f_code is not cached_code
 
 
 def __cacheit(maxsize, *, by_identity=False):
@@ -109,7 +122,7 @@ def __cacheit(maxsize, *, by_identity=False):
     """
     def func_wrapper(func, *, _identity_key=_ReceiverIdentityKey):
         if by_identity:
-            @wraps(func)
+            # This frame distinguishes lookup failures from errors in the call.
             def cached(self_key, /, *args, **kwargs):
                 return func(self_key.value, *args, **kwargs)
         else:
@@ -117,14 +130,20 @@ def __cacheit(maxsize, *, by_identity=False):
         cfunc = lru_cache(maxsize, typed=True)(cached)
 
         if by_identity:
+            cached_code = cached.__code__
+            lookup_code = getattr(cfunc.__call__, '__code__', None)
+            if lookup_code is None:
+                lookup_code = getattr(cfunc, '__code__', None)
+
             @wraps(func)
             def wrapper(*args, **kwargs):
                 if not args:
                     return func(**kwargs)
+                self_key = _identity_key(*args)
                 try:
-                    return cfunc(_identity_key(*args), *args[1:], **kwargs)
+                    return cfunc(self_key, *args[1:], **kwargs)
                 except TypeError as e:
-                    if not _is_unhashable_error(e):
+                    if not _is_unhashable_error(e, cached_code, lookup_code):
                         raise
                     return func(*args, **kwargs)
         else:

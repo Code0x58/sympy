@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sympy import (Basic, Dummy, Expr, Float, Function, Lambda, Rational, S, Subs,
                    Symbol, Tuple, default_sort_key, sin)
+from sympy.core import cache
 from sympy.core.cache import USE_CACHE, cacheit, clear_cache
 from sympy.core.function import AppliedUndef, UndefinedFunction
 from sympy.core.traversal import iterargs, iterfreeargs, preorder_traversal, postorder_traversal
@@ -240,20 +241,24 @@ class TimeStructuralQueries:
 
 
 class TimeCacheFallback:
-    params = ['receiver', 'argument']
-    param_names = ['unhashable']
+    params = [['value', 'identity'], ['hashable', 'receiver', 'argument']]
+    param_names = ['cache', 'unhashable']
 
-    def setup(self, unhashable):
-        @cacheit
+    def setup(self, cache_kind, unhashable):
+        decorate = cacheit if cache_kind == 'value' else getattr(cache, 'cacheit_by_identity', cacheit)
+
+        @decorate
         def length(receiver, values):
             return len(values)
 
         assert USE_CACHE == 'yes' and length.cache_info().maxsize != 0
         self.function = length
-        self.receiver, self.values = ([], ()) if unhashable == 'receiver' else (object(), [])
+        self.receiver, self.values = {'hashable': (object(), ()),
+                                     'receiver': ([], ()),
+                                     'argument': (object(), [])}[unhashable]
         assert self.function(self.receiver, self.values) == 0
 
-    def time_call(self, unhashable):
+    def time_call(self, cache_kind, unhashable):
         self.function(self.receiver, self.values)
 
 
