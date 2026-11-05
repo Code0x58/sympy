@@ -81,7 +81,7 @@ class _ReceiverIdentityKey(_IdentityKey):
 
 def _is_unhashable_error(error):
     """Recognize standard unhashable-key error messages without user hooks."""
-    return (type(error) is TypeError and bool(error.args)
+    return (type(error) is TypeError and len(error.args) == 1
             and type(error.args[0]) is str
             and error.args[0].startswith('unhashable type:'))
 

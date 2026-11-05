@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sympy import (Basic, Dummy, Expr, Float, Function, Lambda, Rational, S, Subs,
                    Symbol, Tuple, default_sort_key, sin)
-from sympy.core.cache import clear_cache
+from sympy.core.cache import USE_CACHE, cacheit, clear_cache
 from sympy.core.function import AppliedUndef, UndefinedFunction
 from sympy.core.traversal import iterargs, iterfreeargs, preorder_traversal, postorder_traversal
 
@@ -237,6 +237,24 @@ class TimeStructuralQueries:
 
     def time_has_free(self, kind):
         self.source.has_free(self.pattern)
+
+
+class TimeCacheFallback:
+    params = ['receiver', 'argument']
+    param_names = ['unhashable']
+
+    def setup(self, unhashable):
+        @cacheit
+        def length(receiver, values):
+            return len(values)
+
+        assert USE_CACHE == 'yes' and length.cache_info().maxsize != 0
+        self.function = length
+        self.receiver, self.values = ([], ()) if unhashable == 'receiver' else (object(), [])
+        assert self.function(self.receiver, self.values) == 0
+
+    def time_call(self, unhashable):
+        self.function(self.receiver, self.values)
 
 
 class _ClassMeta(type):

@@ -180,7 +180,7 @@ def test_cacheit_by_identity_exceptions():
         assert len(calls) == 1 and calls[0] is receiver
 
 
-def test_cacheit_nonstring_typeerror(monkeypatch):
+def test_cacheit_nonstandard_typeerror(monkeypatch):
     class Message(str):
         __slots__ = ()
 
@@ -193,8 +193,12 @@ def test_cacheit_nonstring_typeerror(monkeypatch):
             monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
             scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
             for name in ('cacheit', 'cacheit_by_identity'):
-                for argument in (None, 123, [], Message('error'), Message('unhashable type: custom')):
-                    error = TypeError(argument)
+                for arguments in ((), (None,), (123,), ([],), ('error',),
+                                  (Message('error'),), (Message('unhashable type: custom'),),
+                                  ('unhashable type: custom', None),
+                                  ('unhashable type: custom', 123),
+                                  ('unhashable type: custom', [])):
+                    error = TypeError(*arguments)
                     calls = []
 
                     @scope[name]
@@ -214,15 +218,19 @@ def test_cacheit_nonstring_typeerror(monkeypatch):
 
                     @scope[name]
                     def identify(receiver):
+                        calls.append(receiver)
                         return id(receiver)
 
                     receiver = BadHash()
+                    calls.clear()
                     if mode == 'no' or size == '0':
                         assert identify(receiver) == id(receiver)
+                        assert calls == [receiver]*(2 if mode == 'debug' else 1)
                     else:
                         with raises(TypeError) as caught:
                             identify(receiver)
                         assert caught.value is error
+                        assert calls == ([receiver] if mode == 'debug' else [])
 
 
 def test_cacheit_typeerror_subclass(monkeypatch):
