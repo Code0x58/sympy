@@ -1,5 +1,6 @@
 from __future__ import annotations
 from sympy.core.function import Add, ArgumentIndexError, Function
+from sympy.core.numbers import Integer
 from sympy.core.power import Pow
 from sympy.core.singleton import S
 from sympy.functions.elementary.exponential import log
@@ -56,6 +57,11 @@ class powm1(Function):
 
     def _eval_derivative(self, s):
         return Pow(*self.args).diff(s)
+
+    def _eval_derivative_n_times(self, s, n):
+        if isinstance(n, (int, Integer)) and n > 0:
+            return Pow(*self.args).diff(s, n)
+        return super()._eval_derivative_n_times(s, n)
 
     def fdiff(self, argindex=1):
         """

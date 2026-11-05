@@ -1223,6 +1223,74 @@ class Pow(Expr):
 
         return self * (dexp * log(self.base) + dbase * self.exp/self.base)
 
+    def _eval_derivative_n_times(self, s, n):
+        if not (isinstance(n, (int, Integer)) and n > 1 and isinstance(s, Symbol)
+                and self.is_commutative and not self.exp.is_number and self.exp.diff(s) == 0):
+            return super()._eval_derivative_n_times(s, n)
+        base = self.base
+        multiplier = S.One
+        if base.is_Pow:
+            if not base.exp.is_Rational:
+                return super()._eval_derivative_n_times(s, n)
+            multiplier = base.exp
+            base = base.base
+            if multiplier == 0:
+                return S.Zero
+        exponent = multiplier*self.exp
+        dbase = base.diff(s)
+        if dbase == 0:
+            return S.Zero
+
+        # Partial Bell polynomials: B[n + 1, k] = D(B[n, k]) + b'*B[n, k - 1].
+        if dbase.has(s):
+            partials = [S.One]
+            for _ in range(n):
+                partials = ([S.Zero] +
+                            [p.diff(s) + dbase*q for p, q in zip(partials[1:], partials)] +
+                            [dbase*partials[-1]])
+        else:
+            partials = [S.Zero]*n + [dbase**n]
+
+        coefficient = S.One
+        groups = {}
+        for k in range(1, n + 1):
+            coefficient *= exponent - k + 1
+            value = coefficient*partials[k]
+            if value == 0:
+                continue
+            reduced_k = k
+            while (reduced := value.extract_multiplicatively(base)) is not None:
+                value = reduced
+                reduced_k -= 1
+            # (b**(p/q))**q = b**p uses only integer powers.
+            shift, remainder = divmod(reduced_k, multiplier.p)
+            if remainder > 0 and (self.exp - multiplier.q*(shift + 1)).is_nonnegative:
+                shift += 1
+            groups.setdefault(shift, []).append((reduced_k, value))
+
+        # Keep shared denominators outside a polynomial in the base.
+        merged = {}
+        for shift, values in groups.items():
+            remainder = max(k for k, _ in values) - multiplier.p*shift
+            key = ('denominator', remainder) if remainder > 0 else ('power', shift)
+            if key in merged:
+                previous, entries = merged[key]
+                merged[key] = (max(shift, previous), entries + values)
+            else:
+                merged[key] = (shift, values)
+
+        terms = []
+        for shift, values in merged.values():
+            polynomial = S.Zero
+            previous = min(k for k, _ in values)
+            for k, value in sorted(values, key=lambda item: item[0]):
+                polynomial = base**(k - previous)*polynomial + value
+                previous = k
+            term = (self.base**(self.exp - multiplier.q*shift) *
+                    base**(multiplier.p*shift - previous)*polynomial)
+            terms.append(Mul._cancel_derivative_powers(term))
+        return Add(*terms)
+
     def _eval_evalf(self, prec):
         base, exp = self.as_base_exp()
         if base == S.Exp1:

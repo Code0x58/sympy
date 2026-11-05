@@ -534,6 +534,11 @@ class Add(Expr, AssocOp):
     def _eval_derivative(self, s):
         return self.func(*[a.diff(s) for a in self.args])
 
+    def _eval_derivative_n_times(self, s, n):
+        if isinstance(n, (int, Integer)) and n > 1 and s.is_scalar:
+            return self.func(*(arg.diff((s, n)) for arg in self.args))
+        return super()._eval_derivative_n_times(s, n)
+
     def _eval_nseries(self, x, n, logx, cdir=0):
         terms = [t.nseries(x, n=n, logx=logx, cdir=cdir) for t in self.args]
         return self.func(*terms)
@@ -1315,4 +1320,4 @@ class Add(Expr, AssocOp):
 add = AssocOpDispatcher('add')
 
 from .mul import Mul, _keep_coeff, _unevaluated_Mul
-from .numbers import Rational
+from .numbers import Integer, Rational

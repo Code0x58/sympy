@@ -117,6 +117,18 @@ def test_diff_pow_product_at_zero():
     assert (sin(x)*sin(x)**a).diff(x, 2).subs(a, -1).subs(x, 0) == 0
 
 
+def test_diff_pow_higher_at_zero():
+    assert ((x*(x + 1))**a).diff(x, 2).subs(a, 1).subs(x, 0) == 2
+    assert ((x*(x + 1))**a + x).diff(x, 2).subs(a, 1).subs(x, 0) == 2
+    assert ((x*(x + 1))**a).diff(x, 4).subs(a, 3).subs(x, 0) == 72
+    assert (sin(x)**a).diff(x, 4).subs(a, 2).subs(x, 0) == -8
+    assert ((sin(x)**2)**a).diff(x, 3).subs(a, 2).subs(x, 0) == 0
+    assert ((sin(x)**2)**a).diff(x, 4).subs(a, S.Half).subs(x, 0) == 0
+    assert (((x**2 - 1)**2)**a).diff(x, 2).subs(a, S.Half).subs(x, 0) == -2
+    assert (((x + 1)**-2)**a).diff(x, 2).subs(a, -1).subs(x, -1) == 2
+    assert (sqrt(x + 1)**a).diff(x, 2).subs(a, 4).subs(x, -1) == 2
+
+
 def test_diff_pow_product_noncommutative():
     A = Symbol('A', commutative=False)
     B = Symbol('B', commutative=False)
