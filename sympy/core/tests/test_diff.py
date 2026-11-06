@@ -128,6 +128,13 @@ def test_diff_pow_higher_at_zero():
     assert (((x**2 - 1)**2)**a).diff(x, 2).subs(a, S.Half).subs(x, 0) == -2
     assert (((x + 1)**-2)**a).diff(x, 2).subs(a, -1).subs(x, -1) == 2
     assert (sqrt(x + 1)**a).diff(x, 2).subs(a, 4).subs(x, -1) == 2
+    assert (((x*(x + 1))**Rational(3, 2))**a).diff(x, 4).subs(a, 2).subs(x, 0) == 72
+
+
+def test_diff_pow_reciprocal_product_at_zero():
+    expr = x*(x + 1)
+    assert ((expr**-2)**a).diff(x, 2).subs(a, -1).subs(x, 0) == 2
+    assert ((expr**-2)**a).diff(x, 4).subs(a, -1).subs(x, 0) == 24
 
 
 def test_diff_pow_symbolic_nested_at_zero():

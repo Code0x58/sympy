@@ -1235,6 +1235,10 @@ class Pow(Expr):
             multiplier *= base.exp
             base = base.base
             depth += 1
+        if base.is_Mul and all(e.is_Integer and e < 0 for e in base.as_powers_dict().values()):
+            multiplier = -multiplier
+            base = 1/base
+            depth += 1
         if multiplier == 0:
             return S.Zero
         exponent = multiplier*self.exp
@@ -1281,7 +1285,7 @@ class Pow(Expr):
         merged = {}
         for shift, values in groups.items():
             remainder = max(k for k, _ in values) - multiplier.p*shift
-            key = ('denominator', remainder) if remainder > 0 else ('power', shift)
+            key = ('denominator',) if remainder > 0 else ('power', shift)
             if key in merged:
                 previous, entries = merged[key]
                 merged[key] = (max(shift, previous), entries + values)
