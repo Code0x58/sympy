@@ -676,11 +676,11 @@ class Function(Application, Expr):
             return super()._eval_derivative_n_times(s, n)
         args = list(self.args)
 
-        def unsupported_partial(expr, variables, formal=True):
+        def unsupported_partial(expr, variables, parents=()):
             return any(d.has(*variables) and (
                 d.expr.is_Function
                 and d.expr.func._eval_derivative is not Function._eval_derivative
-                or not formal and d.expr.func is self.func)
+                or d.expr.func in parents)
                 for d in expr.atoms(Derivative))
 
         if len(varying) > 1:
@@ -710,16 +710,17 @@ class Function(Application, Expr):
         outer = self.func(*args)
         first = outer.diff(t, simplify=False)
         # Formal first partials can be retained at higher orders.
-        formal = any(d.expr.func is self.func for d in first.atoms(Derivative))
+        formal = {d.expr.func for d in first.atoms(Derivative) if d.has(t)}
+        parents = {node.func for node in outer.atoms(Expr) if node.has(t)} - formal
         darg = arg.diff(s)
         if not darg.has(s):
             result = outer.diff((t, n), simplify=False)
-            if unsupported_partial(result, (t,), formal):
+            if unsupported_partial(result, (t,), parents):
                 return super()._eval_derivative_n_times(s, n)
             return result.subs(t, arg)*darg**n
 
         partials = [first] + [outer.diff((t, k), simplify=False) for k in range(2, n + 1)]
-        if any(unsupported_partial(p, (t,), formal) for p in partials):
+        if any(unsupported_partial(p, (t,), parents) for p in partials):
             return super()._eval_derivative_n_times(s, n)
         from sympy.functions.combinatorial.numbers import bell
         derivatives = [darg] + [arg.diff((s, k), simplify=False) for k in range(2, n + 1)]

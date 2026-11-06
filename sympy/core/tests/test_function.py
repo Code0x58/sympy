@@ -99,6 +99,24 @@ def test_higher_derivative_argument_assumptions():
     assert F(a*x).diff(x, 2).subs({a: 3, x: 2*I}) == -9*I
 
 
+@pytest.mark.parametrize('shift', [0, 1], ids=['function', 'sum'])
+def test_higher_derivative_function_rewrite(shift):
+    class G(Function):
+        def fdiff(self, argindex=1):
+            return conjugate(self.args[argindex - 1])
+
+    class F(G):
+        @classmethod
+        def eval(cls, arg):
+            if arg.is_Symbol:
+                return G(arg) + shift
+
+    x = Symbol('x', real=True)
+    a = Symbol('a', positive=True)
+    assert F(I*a*x).diff(x, 2).subs({a: 3, x: 2}) == 9
+    assert F(I*a*x**2).diff(x, 2).subs({a: 3, x: 2}) == 216
+
+
 def test_general_function_nullary():
     nu = Function('nu')
 
