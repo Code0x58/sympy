@@ -666,13 +666,37 @@ class Function(Application, Expr):
 
     def _eval_derivative_n_times(self, s, n):
         if not (isinstance(n, (int, Integer)) and n > 1 and isinstance(s, Symbol)
-                and len(self.args) == 1 and self.is_commutative
+                and self.is_commutative
                 and self.free_symbols - s.free_symbols
                 and type(self)._eval_derivative is Function._eval_derivative):
             return super()._eval_derivative_n_times(s, n)
-        arg = self.args[0]
+        varying = [(i, arg) for i, arg in enumerate(self.args) if arg.has(s)]
+        if not varying or all(arg == s for _, arg in varying):
+            return super()._eval_derivative_n_times(s, n)
+        args = list(self.args)
+        if len(varying) > 1:
+            from sympy.polys.polytools import Poly
+            shifts = []
+            generators = []
+            substitutions = {}
+            for i, arg in varying:
+                placeholders = [Dummy() for _ in range(n + 1)]
+                args[i] = placeholders[0]
+                shifts.extend(zip(placeholders, placeholders[1:]))
+                generators.extend(placeholders[1:])
+                substitutions.update((p, arg.diff((s, k), simplify=False))
+                                     for k, p in enumerate(placeholders))
+            result = self.func(*args)
+            for _ in range(n):
+                result = Add(*(result.diff(p, simplify=False)*dp for p, dp in shifts))
+            # Keep each inner derivative as an independent polynomial factor.
+            result = Poly(result, *generators).as_expr()
+            return result.subs(substitutions, simultaneous=True)
+
+        i, arg = varying[0]
         t = Dummy()
-        outer = self.func(t)
+        args[i] = t
+        outer = self.func(*args)
         darg = arg.diff(s)
         if not darg.has(s):
             return outer.diff((t, n), simplify=False).subs(t, arg)*darg**n

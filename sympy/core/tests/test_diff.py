@@ -11,7 +11,8 @@ from sympy.functions.elementary.complexes import (im, re)
 from sympy.functions.elementary.exponential import (exp, log)
 from sympy.functions.elementary.miscellaneous import Max, sqrt
 from sympy.functions.elementary.piecewise import Piecewise
-from sympy.functions.elementary.trigonometric import (cos, cot, sin, tan)
+from sympy.functions.elementary.trigonometric import (atan2, cos, cot, sin, tan)
+from sympy.functions.special.bessel import besselj
 from sympy.tensor.array.ndim_array import NDimArray
 from sympy.testing.pytest import raises, slow
 from sympy.abc import a, b, c, x, y, z
@@ -147,6 +148,14 @@ def test_diff_composed_pow_at_zero():
     assert sqrt(1 + expr).diff(x, 2).subs(a, 1).subs(x, 0) == Rational(3, 4)
     f = Function('f')
     assert f(expr).diff(x, 2).subs(f, sin).doit().subs(a, 1).subs(x, 0) == 2
+
+
+def test_diff_multivariate_composed_pow_at_zero():
+    expr = (x*(x + 1))**a
+    assert atan2(expr, 1).diff(x, 2).subs(a, 1).subs(x, 0) == 2
+    assert besselj(b, expr).diff(x, 2).subs({a: 1, b: 0}).subs(x, 0) == -S.Half
+    assert atan2(expr, x + 1).diff(x, 2).subs(a, 1).subs(x, 0) == 0
+    assert atan2(expr, x + 1).diff(x, 3).subs(a, 1).subs(x, 0) == -2
 
 
 def test_diff_pow_product_noncommutative():
