@@ -14,7 +14,7 @@ from sympy.core.power import Pow
 from sympy.core.relational import Eq
 from sympy.core.singleton import S
 from sympy.core.symbol import symbols, Dummy, Symbol
-from sympy.functions.elementary.complexes import im, re
+from sympy.functions.elementary.complexes import Abs, conjugate, im, re
 from sympy.functions.elementary.exponential import log, exp
 from sympy.functions.elementary.miscellaneous import sqrt
 from sympy.functions.elementary.piecewise import Piecewise
@@ -74,6 +74,30 @@ def test_general_function():
     assert edy == 0
     assert edxdx == diff(diff(nu(x), x), x)
     assert edxdy == 0
+
+def test_higher_derivative_argument_assumptions():
+    class F(Function):
+        def fdiff(self, argindex=1):
+            return Abs(self.args[argindex - 1])
+
+    x = Symbol('x', real=True)
+    a = Symbol('a', positive=True)
+    assert F(a*x).diff(x, 2).subs({a: 3, x: 2}) == 9
+    assert F(a*x**2).diff(x, 2).subs({a: 3, x: 2}) == 216
+    assert F(a*x, x**2).diff(x, 2).subs({a: 3, x: 2}) == 33
+    assert F(I*a*x).diff(x, 2).subs({a: 3, x: 2}) == 9*I
+    assert F(I*a*x, x**2).diff(x, 2).subs({a: 3, x: 2}) == 24 + 9*I
+    assert F(I*a*x**2).diff(x, 2).subs({a: 3, x: 2}) == 216*I
+
+    class G(Function):
+        def fdiff(self, argindex=1):
+            return conjugate(self.args[argindex - 1])
+
+    assert G(I*a*x).diff(x, 2).subs({a: 3, x: 2}) == 9
+    assert G(I*a*x**2).diff(x, 2).subs({a: 3, x: 2}) == 216
+    x = Symbol('x', imaginary=True)
+    assert F(a*x).diff(x, 2).subs({a: 3, x: 2*I}) == -9*I
+
 
 def test_general_function_nullary():
     nu = Function('nu')
@@ -540,6 +564,12 @@ def test_Subs():
     assert Derivative(f(x, g(x)), x).doit() == Derivative(
         f(x, g(x)), g(x))*Derivative(g(x), x) + Subs(Derivative(
         f(y, g(x)), y), y, x)
+
+def test_higher_derivative_formal_partials():
+    expr = f(x + y, x**2)
+    result = expr.diff(x, 3).subs(f, Lambda((t, w), t**2*w**2)).doit()
+    assert result.subs({x: 1, y: 0}) == 120
+
 
 def test_doitdoit():
     done = Derivative(f(x, g(x)), x, g(x)).doit()

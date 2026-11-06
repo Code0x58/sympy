@@ -37,6 +37,7 @@ from collections.abc import Iterable
 import copyreg
 
 from .add import Add
+from .assumptions import assumptions
 from .basic import Basic, _atomic
 from .cache import cacheit
 from .containers import Tuple, Dict
@@ -674,13 +675,21 @@ class Function(Application, Expr):
         if not varying or all(arg == s for _, arg in varying):
             return super()._eval_derivative_n_times(s, n)
         args = list(self.args)
+
+        def unsupported_partial(expr, variables, formal=True):
+            return any(d.has(*variables) and (
+                d.expr.is_Function
+                and d.expr.func._eval_derivative is not Function._eval_derivative
+                or not formal and d.expr.func is self.func)
+                for d in expr.atoms(Derivative))
+
         if len(varying) > 1:
             from sympy.polys.polytools import Poly
             shifts = []
             generators = []
             substitutions = {}
             for i, arg in varying:
-                placeholders = [Dummy() for _ in range(n + 1)]
+                placeholders = [Dummy(**assumptions(arg))] + [Dummy() for _ in range(n)]
                 args[i] = placeholders[0]
                 shifts.extend(zip(placeholders, placeholders[1:]))
                 generators.extend(placeholders[1:])
@@ -689,25 +698,36 @@ class Function(Application, Expr):
             result = self.func(*args)
             for _ in range(n):
                 result = Add(*(result.diff(p, simplify=False)*dp for p, dp in shifts))
+            if unsupported_partial(result, [args[i] for i, _ in varying]):
+                return super()._eval_derivative_n_times(s, n)
             # Keep each inner derivative as an independent polynomial factor.
             result = Poly(result, *generators).as_expr()
             return result.subs(substitutions, simultaneous=True)
 
         i, arg = varying[0]
-        t = Dummy()
+        t = Dummy(**assumptions(arg))
         args[i] = t
         outer = self.func(*args)
+        first = outer.diff(t, simplify=False)
+        # Formal first partials can be retained at higher orders.
+        formal = any(d.expr.func is self.func for d in first.atoms(Derivative))
         darg = arg.diff(s)
         if not darg.has(s):
-            return outer.diff((t, n), simplify=False).subs(t, arg)*darg**n
+            result = outer.diff((t, n), simplify=False)
+            if unsupported_partial(result, (t,), formal):
+                return super()._eval_derivative_n_times(s, n)
+            return result.subs(t, arg)*darg**n
 
+        partials = [first] + [outer.diff((t, k), simplify=False) for k in range(2, n + 1)]
+        if any(unsupported_partial(p, (t,), formal) for p in partials):
+            return super()._eval_derivative_n_times(s, n)
         from sympy.functions.combinatorial.numbers import bell
         derivatives = [darg] + [arg.diff((s, k), simplify=False) for k in range(2, n + 1)]
         placeholders = [Dummy() for _ in derivatives]
         substitutions = dict(zip(placeholders, derivatives))
-        return Add(*(outer.diff((t, k), simplify=False).subs(t, arg)
+        return Add(*(p.subs(t, arg)
                      * bell(n, k, placeholders[:n - k + 1]).xreplace(substitutions)
-                     for k in range(1, n + 1)))
+                     for k, p in enumerate(partials, 1)))
 
     def _eval_is_commutative(self):
         return fuzzy_and(a.is_commutative for a in self.args)

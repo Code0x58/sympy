@@ -163,6 +163,8 @@ def test_diff_multivariate_composed_pow_at_zero():
     assert besselj(b, expr).diff(x, 2).subs({a: 1, b: 0}).subs(x, 0) == -S.Half
     assert atan2(expr, x + 1).diff(x, 2).subs(a, 1).subs(x, 0) == 0
     assert atan2(expr, x + 1).diff(x, 3).subs(a, 1).subs(x, 0) == -2
+    expr = besselj(a*x + b, (x*(x + 1))**c)
+    assert expr.diff(x, 2).subs({a: 0, b: 2, c: 1}).subs(x, 0) == Rational(1, 4)
 
 
 def test_diff_pow_product_noncommutative():
