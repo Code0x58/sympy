@@ -702,7 +702,8 @@ class Function(Application, Expr):
                 return super()._eval_derivative_n_times(s, n)
             # Keep each inner derivative as an independent polynomial factor.
             result = Poly(result, *generators).as_expr()
-            return result.subs(substitutions, simultaneous=True)
+            # Sequential substitution preserves the bindings of formal partials.
+            return result.subs(substitutions)
 
         i, arg = varying[0]
         t = Dummy(**assumptions(arg))

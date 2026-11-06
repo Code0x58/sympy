@@ -589,6 +589,13 @@ def test_higher_derivative_formal_partials():
     assert result.subs({x: 1, y: 0}) == 120
 
 
+def test_higher_derivative_formal_partials_coincident_arguments():
+    a = Symbol('a')
+    result = f(a*x, x).diff(x, 3).subs(a, 1)
+    result = result.subs(f, Lambda((t, w), t**2*w**3)).doit()
+    assert result.subs(x, 1) == 60
+
+
 def test_doitdoit():
     done = Derivative(f(x, g(x)), x, g(x)).doit()
     assert done == done.doit()
