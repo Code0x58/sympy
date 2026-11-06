@@ -1908,6 +1908,9 @@ class Basic(Printable):
         """Return True if self has object(s) ``x`` as a free expression
         else False.
 
+        Classes derived from ``Basic`` are type patterns; other classes
+        match literal class-valued arguments.
+
         Examples
         ========
 
@@ -1941,7 +1944,8 @@ class Basic(Printable):
                 non-Basic iterable. Don't forget to unpack
                 iterables: `eq.has_free(*patterns)`'''))
         # try quick test first
-        s = {pattern for pattern in patterns if not isinstance(pattern, type)}
+        s = {pattern for pattern in patterns
+             if not (isinstance(pattern, type) and issubclass(pattern, Basic))}
         rv = self.has_xfree(s)
         if rv:
             return rv

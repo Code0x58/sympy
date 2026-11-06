@@ -421,6 +421,21 @@ class TimeClassPatternQueries:
         self.source.has_free(self.pattern)
 
 
+class TimeClassLiteralFreeQueries:
+    params = [['native', 'sympy'], [False, True]]
+    param_names = ['pattern', 'cached']
+
+    def setup(self, pattern, cached):
+        self.pattern = int if pattern == 'native' else Basic
+        self.source = Basic(int) if pattern == 'native' else Basic()
+        query = Basic.has_free if cached else Basic.has_free.__wrapped__
+        self.query = lambda: query(self.source, self.pattern)
+        assert self.query()
+
+    def time_has_free(self, pattern, cached):
+        self.query()
+
+
 class TimeClassPatternAliases:
     def setup(self):
         self.source = Basic(Symbol('class_alias_query_x'))

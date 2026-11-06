@@ -1127,6 +1127,79 @@ def test_structural_query_class_patterns():
     assert source.has_xfree({first})
 
 
+def test_has_free_native_class_literals():
+    class Literal:
+        pass
+
+    class Missing:
+        pass
+
+    x = Symbol('native_class_x')
+    for literal in (int, str, type, Literal):
+        for wrap in (Basic, lambda value: Basic(value, x),
+                     lambda value: Basic(Basic(value)),
+                     lambda value: Basic(Basic(value), x)):
+            source = wrap(literal)
+            for patterns in ((literal,), (literal, Missing), (Missing, literal)):
+                assert source.has_free(*patterns)
+                assert source.has_free(*patterns)
+            assert not source.has_free(Missing)
+
+
+def test_has_free_equal_native_class_literals():
+    class Meta(type):
+        def __eq__(cls, other):
+            return isinstance(other, Meta) and cls.label == other.label
+
+        def __hash__(cls):
+            return hash(cls.label)
+
+    first, alias, other = [Meta(name, (), {'args': (), 'label': label})
+                          for name, label in (('First', 0), ('Alias', 0), ('Other', 1))]
+    assert first == alias and first is not alias
+    for wrap in (Basic, lambda value: Basic(Basic(value))):
+        source = wrap(first)
+        for patterns in ((first, alias, other), (other, alias, first)):
+            clear_cache()
+            assert [source.has_free(pattern) for pattern in patterns] == [
+                pattern is not other for pattern in patterns]
+            assert source.has_free(*patterns)
+        assert not wrap(first()).has_free(first)
+
+
+def test_has_free_native_and_basic_class_patterns():
+    class Meta(type):
+        def __eq__(cls, other):
+            return other is Symbol or isinstance(other, Meta)
+
+        def __hash__(cls):
+            return hash(Symbol)
+
+    class Literal(metaclass=Meta):
+        pass
+
+    assert Literal == Symbol and hash(Literal) == hash(Symbol)
+    for source in (Basic(Literal), Basic(Symbol)):
+        for patterns in ((Literal, Symbol), (Symbol, Literal)):
+            clear_cache()
+            assert [source.has_free(pattern) for pattern in patterns] == [
+                pattern is Literal for pattern in patterns]
+            assert source.has_free(*patterns)
+            assert source.has_xfree({Literal})
+
+
+def test_has_free_native_class_literals_in_bindings():
+    class Literal:
+        pass
+
+    x = Symbol('bound_class_x')
+    for literal in (int, str, type, Literal):
+        for source in (Lambda(x, Basic(literal)), Subs(Basic(literal, x), x, 0)):
+            assert source.has_free(literal)
+            assert source.has_xfree({literal})
+            assert not source.has_free(x)
+
+
 def test_structural_query_unhashable_class_patterns():
     class Meta(type):
         __hash__ = None
