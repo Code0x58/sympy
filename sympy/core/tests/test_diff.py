@@ -138,6 +138,17 @@ def test_diff_pow_symbolic_nested_at_zero():
     assert (((x**b)**c)**a).diff(x, 2).subs({a: 2, b: 1, c: 1}).subs(x, 0) == 2
 
 
+def test_diff_composed_pow_at_zero():
+    expr = (x*(x + 1))**a
+    assert sin(expr).diff(x, 2).subs(a, 1).subs(x, 0) == 2
+    assert sin(expr).diff(x, 3).subs(a, 1).subs(x, 0) == -1
+    assert exp(expr).diff(x, 2).subs(a, 1).subs(x, 0) == 3
+    assert log(1 + expr).diff(x, 2).subs(a, 1).subs(x, 0) == 1
+    assert sqrt(1 + expr).diff(x, 2).subs(a, 1).subs(x, 0) == Rational(3, 4)
+    f = Function('f')
+    assert f(expr).diff(x, 2).subs(f, sin).doit().subs(a, 1).subs(x, 0) == 2
+
+
 def test_diff_pow_product_noncommutative():
     A = Symbol('A', commutative=False)
     B = Symbol('B', commutative=False)

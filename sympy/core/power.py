@@ -1225,7 +1225,8 @@ class Pow(Expr):
 
     def _eval_derivative_n_times(self, s, n):
         if not (isinstance(n, (int, Integer)) and n > 1 and isinstance(s, Symbol)
-                and self.is_commutative and not self.exp.is_number and self.exp.diff(s) == 0):
+                and self.is_commutative and self.exp.diff(s) == 0
+                and (not self.exp.is_number or self.base.free_symbols - s.free_symbols)):
             return super()._eval_derivative_n_times(s, n)
         base = self.base
         multiplier = S.One

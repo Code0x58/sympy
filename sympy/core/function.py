@@ -664,6 +664,27 @@ class Function(Application, Expr):
             l.append(df * da)
         return Add(*l)
 
+    def _eval_derivative_n_times(self, s, n):
+        if not (isinstance(n, (int, Integer)) and n > 1 and isinstance(s, Symbol)
+                and len(self.args) == 1 and self.is_commutative
+                and self.free_symbols - s.free_symbols
+                and type(self)._eval_derivative is Function._eval_derivative):
+            return super()._eval_derivative_n_times(s, n)
+        arg = self.args[0]
+        t = Dummy()
+        outer = self.func(t)
+        darg = arg.diff(s)
+        if not darg.has(s):
+            return outer.diff((t, n), simplify=False).subs(t, arg)*darg**n
+
+        from sympy.functions.combinatorial.numbers import bell
+        derivatives = [darg] + [arg.diff((s, k), simplify=False) for k in range(2, n + 1)]
+        placeholders = [Dummy() for _ in derivatives]
+        substitutions = dict(zip(placeholders, derivatives))
+        return Add(*(outer.diff((t, k), simplify=False).subs(t, arg)
+                     * bell(n, k, placeholders[:n - k + 1]).xreplace(substitutions)
+                     for k in range(1, n + 1)))
+
     def _eval_is_commutative(self):
         return fuzzy_and(a.is_commutative for a in self.args)
 
