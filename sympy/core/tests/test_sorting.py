@@ -260,10 +260,10 @@ def test_tuple_field_custom_ordering():
 
     first, second = Basic(FailingTuple((1,))), Basic(FailingTuple((2,)))
     assert first.compare(Basic(FailingTuple((1,)))) == 0
-    with raises(ValueError, match='tuple ordering failed'):
-        first.compare(second)
-    with raises(ValueError, match='tuple ordering failed'):
-        assert default_sort_key(first) < default_sort_key(second)
+    assert raises(ValueError,
+        lambda: first.compare(second)).value.args == ('tuple ordering failed',)
+    assert raises(ValueError,
+        lambda: default_sort_key(first) < default_sort_key(second)).value.args == ('tuple ordering failed',)
 
 
 def test_tuple_field_ordering_groups():
@@ -458,11 +458,11 @@ def test_frozenset_field_ordering_errors():
             raise RuntimeError('custom ordering failed')
 
     first, second = [Basic(UnorderedSet([value])) for value in (1, 2)]
-    with raises(RuntimeError, match='custom ordering failed'):
-        first.compare(second)
+    assert raises(RuntimeError,
+        lambda: first.compare(second)).value.args == ('custom ordering failed',)
     clear_cache()
-    with raises(RuntimeError, match='custom ordering failed'):
-        assert default_sort_key(first) < default_sort_key(second)
+    assert raises(RuntimeError,
+        lambda: default_sort_key(first) < default_sort_key(second)).value.args == ('custom ordering failed',)
 
 
 def test_frozenset_field_partial_order():
@@ -473,11 +473,11 @@ def test_frozenset_field_partial_order():
         __hash__ = frozenset.__hash__
 
     first, second = [Basic(ForwardSet([value])) for value in (1, 2)]
-    with raises(TypeError, match='Cannot order frozenset fields with custom equality'):
-        first.compare(second)
+    assert raises(TypeError,
+        lambda: first.compare(second)).value.args == ('Cannot order frozenset fields with custom equality',)
     clear_cache()
-    with raises(TypeError, match='Cannot order frozenset fields with custom equality'):
-        assert default_sort_key(first) < default_sort_key(second)
+    assert raises(TypeError,
+        lambda: default_sort_key(first) < default_sort_key(second)).value.args == ('Cannot order frozenset fields with custom equality',)
 
 
 def test_class_sort_keys():
@@ -981,8 +981,8 @@ def test_metadata_sort_key_equality_error(monkeypatch):
             raise RuntimeError('metadata equality failed')
 
     first = function_module._get_comparison_key(Value())
-    with raises(RuntimeError, match='metadata equality failed'):
-        function_module._get_comparison_key(Value())
+    assert raises(RuntimeError,
+        lambda: function_module._get_comparison_key(Value())).value.args == ('metadata equality failed',)
     assert function_module._comparison_keys.get(first)() is first
 
 

@@ -833,8 +833,8 @@ def test_Subs_evalf_precision(precision, method):
 def test_Subs_evalf_options(method):
     source = Subs(Derivative(f(x), x), x, 0)
     assert getattr(source, method)(50, subs={source: pi}) == pi.evalf(50)
-    with raises(TypeError, match='subs must be given as a dictionary'):
-        getattr(source, method)(subs=[(x, 1)])
+    assert raises(TypeError,
+        lambda: getattr(source, method)(subs=[(x, 1)])).value.args == ('subs must be given as a dictionary',)
 
 
 def test_Subs_bound_placeholder_identity():
@@ -2065,10 +2065,10 @@ def test_canonical_free_name_error():
             raise ValueError('free symbol name failed')
 
     source = Subs(f(x), x, FreeAtom())
-    with raises(ValueError, match='free symbol name failed'):
-        source.canonical_variables
-    with raises(ValueError, match='free symbol name failed'):
-        source.as_dummy()
+    assert raises(ValueError,
+        lambda: source.canonical_variables).value.args == ('free symbol name failed',)
+    assert raises(ValueError,
+        lambda: source.as_dummy()).value.args == ('free symbol name failed',)
 
 
 @pytest.mark.parametrize('outer', [

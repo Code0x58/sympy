@@ -205,15 +205,15 @@ def test_is_same_metadata_after_children():
 
     x, y = symbols('x y')
     assert not Basic.is_same(Metadata(x), Metadata(y))
-    with raises(ValueError, match='metadata comparison failed'):
-        Basic.is_same(Metadata(x), Metadata(x))
+    assert raises(ValueError,
+        lambda: Basic.is_same(Metadata(x), Metadata(x))).value.args == ('metadata comparison failed',)
 
     class EndingValue:
         def __eq__(self, other):
             raise StopIteration('equality failed')
 
-    with raises(StopIteration, match='equality failed'):
-        Basic.is_same(EndingValue(), EndingValue())
+    assert raises(StopIteration,
+        lambda: Basic.is_same(EndingValue(), EndingValue())).value.args == ('equality failed',)
 
 
 def test_is_same_deep_frozensets():
@@ -284,8 +284,8 @@ def test_is_same_lazy_iterables():
         left, right = wrap(Stream(S.Zero)), wrap(Stream(S.One))
         assert not Basic.is_same(left, right)
         assert not Basic.is_same(right, left)
-        with raises(ValueError, match='unvisited tail'):
-            Basic.is_same(wrap(Stream(S.One)), wrap(Stream(S.One)))
+        assert raises(ValueError,
+            lambda: Basic.is_same(wrap(Stream(S.One)), wrap(Stream(S.One)))).value.args == ('unvisited tail',)
 
 
 def test_is_same_iterable_lengths():
@@ -431,8 +431,8 @@ def test_custom_frozenset_ordering_alias():
         def __lt__(self, other):
             raise RuntimeError('label ordering failed')
 
-    with raises(RuntimeError, match='label ordering failed'):
-        Basic(FailingLabel(0)).compare(Basic(LabelSet(1)))
+    assert raises(RuntimeError,
+        lambda: Basic(FailingLabel(0)).compare(Basic(LabelSet(1)))).value.args == ('label ordering failed',)
 
 
 def test_frozenset_argument_kinds():
@@ -821,8 +821,8 @@ def test_argument_kinds_before_equality():
                 assert default_sort_key(first) != default_sort_key(second)
 
     for wrap in (lambda value: value, lambda value: (value,)):
-        with raises(RuntimeError, match='native equality failed'):
-            assert Basic(wrap(Value())) == Basic(wrap(Value()))
+        assert raises(RuntimeError,
+            lambda: Basic(wrap(Value())) == Basic(wrap(Value()))).value.args == ('native equality failed',)
 
 
 def test_argument_equality_short_circuit():
@@ -894,8 +894,8 @@ def test_symbol_equality_compatibility():
 
     first = Symbol.__xnew__(Symbol, FailingName('first'))
     second = Symbol.__xnew__(Symbol, 'second')
-    with raises(RuntimeError, match='symbol name equality failed'):
-        assert first == second
+    assert raises(RuntimeError,
+        lambda: first == second).value.args == ('symbol name equality failed',)
 
 
 def test_native_argument_equality_without_ordering():
@@ -1577,9 +1577,8 @@ def test_replace_class_callback_errors():
                         calls.append(node)
                         raise error
 
-                    with raises(ValueError) as caught:
-                        Basic(literal).replace(query, value,
-                            simultaneous=simultaneous, map=mapping)
+                    caught = raises(ValueError, lambda: Basic(literal).replace(
+                        query, value, simultaneous=simultaneous, map=mapping))
                     assert caught.value is error
                     assert calls == [literal]*(1 if phase == 'query' else 2)
 

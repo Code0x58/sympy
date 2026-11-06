@@ -151,8 +151,8 @@ def test_traversal_native_iteration_error():
 
     for traversal in (preorder_traversal, postorder_traversal):
         for value in (Value(), Basic(Value())):
-            with raises(ValueError, match='iteration failed'):
-                list(traversal(value))
+            assert raises(ValueError,
+                lambda: list(traversal(value))).value.args == ('iteration failed',)
 
 
 def test_iterargs_native_arguments():

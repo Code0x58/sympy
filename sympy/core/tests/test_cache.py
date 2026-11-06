@@ -209,8 +209,7 @@ def test_cacheit_nonstandard_typeerror(monkeypatch):
                         raise error
 
                     receiver = object()
-                    with raises(TypeError) as caught:
-                        fail(receiver)
+                    caught = raises(TypeError, lambda: fail(receiver))
                     assert caught.value is error
                     assert calls == [receiver]
 
@@ -229,8 +228,7 @@ def test_cacheit_nonstandard_typeerror(monkeypatch):
                         assert identify(receiver) == id(receiver)
                         assert calls == [receiver]*(2 if mode == 'debug' else 1)
                     else:
-                        with raises(TypeError) as caught:
-                            identify(receiver)
+                        caught = raises(TypeError, lambda: identify(receiver))
                         assert caught.value is error
                         assert calls == ([receiver] if mode == 'debug' else [])
 
@@ -260,8 +258,7 @@ def test_cacheit_typeerror_subclass(monkeypatch):
                         raise error
 
                     receiver = object()
-                    with raises(TypeError) as caught:
-                        fail(receiver)
+                    caught = raises(TypeError, lambda: fail(receiver))
                     assert caught.value is error
                     assert calls == [receiver]
 
@@ -277,8 +274,7 @@ def test_cacheit_typeerror_subclass(monkeypatch):
                     if mode == 'no' or size == '0':
                         assert identify(receiver) == id(receiver)
                     else:
-                        with raises(TypeError) as caught:
-                            identify(receiver)
+                        caught = raises(TypeError, lambda: identify(receiver))
                         assert caught.value is error
 
 
@@ -312,8 +308,7 @@ def test_cacheit_by_identity_function_typeerror(monkeypatch):
                                     'callable': Failure(), 'bound': Failure().__call__}[kind]
                         cached = scope['cacheit_by_identity'](function)
                         assert unwrap(cached) is unwrap(function)
-                        with raises(TypeError) as caught:
-                            cached(*arguments)
+                        caught = raises(TypeError, lambda: cached(*arguments))
                         assert caught.value is error
                         assert calls == [arguments[0]]
 
@@ -338,8 +333,7 @@ def test_cacheit_by_identity_builtin_typeerror(monkeypatch):
                 cached = scope['cacheit_by_identity'](abs)
                 assert unwrap(cached) is abs
                 value = Value()
-                with raises(TypeError) as caught:
-                    cached(value)
+                caught = raises(TypeError, lambda: cached(value))
                 assert caught.value is error
                 assert calls == [value]
 
@@ -390,8 +384,7 @@ def test_cacheit_receiver_adaptation_typeerror(monkeypatch):
                     return 42
 
                 cached = scope['cacheit_by_identity'](identify, key=Key)
-                with raises(TypeError) as caught:
-                    cached(object())
+                caught = raises(TypeError, lambda: cached(object()))
                 assert caught.value is error
                 assert not calls
 
@@ -427,8 +420,7 @@ def test_cacheit_by_identity_python_lookup_wrapper(monkeypatch):
                 raise error
 
             receiver = object()
-            with raises(TypeError) as caught:
-                scope['cacheit_by_identity'](fail)(receiver)
+            caught = raises(TypeError, lambda: scope['cacheit_by_identity'](fail)(receiver))
             assert caught.value is error
             assert calls == [receiver]
 
@@ -490,8 +482,7 @@ def test_cacheit_by_identity_debug_verification_typeerror(monkeypatch):
                                     'callable': Failure(), 'bound': Failure().__call__}[kind]
                         cached = scope['cacheit_by_identity'](function, key=Key)
                         assert unwrap(cached) is unwrap(function)
-                        with raises(TypeError) as caught:
-                            cached(*arguments)
+                        caught = raises(TypeError, lambda: cached(*arguments))
                         assert caught.value is error
                         assert constructions == [arguments[0]]
                         assert accesses == [arguments[0]]*2
@@ -520,8 +511,7 @@ def test_cacheit_by_identity_debug_builtin_typeerror(monkeypatch):
                 cached = scope['cacheit_by_identity'](abs)
                 assert unwrap(cached) is abs
                 receiver = Value()
-                with raises(TypeError) as caught:
-                    cached(receiver)
+                caught = raises(TypeError, lambda: cached(receiver))
                 assert caught.value is error
                 assert calls == [receiver]*2
 
@@ -594,8 +584,8 @@ def test_cacheit_by_identity_debug_cache_consistency(monkeypatch):
         if size == '0':
             assert cached(receiver) == 1
         else:
-            with raises(RuntimeError, match='Returned values are not the same'):
-                cached(receiver)
+            assert raises(RuntimeError,
+                lambda: cached(receiver)).value.args == ('Returned values are not the same',)
         assert constructions == [receiver]*2
         scope['clear_cache']()
         assert not unexpected
@@ -619,8 +609,7 @@ def test_cacheit_function_unhashable_typeerror(monkeypatch):
         return 42
 
     receiver = object()
-    with raises(TypeError) as caught:
-        fail(receiver)
+    caught = raises(TypeError, lambda: fail(receiver))
     assert caught.value is error
     assert calls == [receiver]
 
