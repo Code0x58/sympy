@@ -535,8 +535,10 @@ class Add(Expr, AssocOp):
         return self.func(*[a.diff(s) for a in self.args])
 
     def _eval_derivative_n_times(self, s, n):
-        if isinstance(n, (int, Integer)) and n > 1 and s.is_scalar:
-            return self.func(*(arg.diff((s, n)) for arg in self.args))
+        # Keep incremental derivatives when no independent parameters need specialization.
+        if (isinstance(n, (int, Integer)) and n > 1 and s.is_scalar
+                and self.free_symbols - s.free_symbols):
+            return self.func(*(arg.diff((s, n), simplify=False) for arg in self.args))
         return super()._eval_derivative_n_times(s, n)
 
     def _eval_nseries(self, x, n, logx, cdir=0):

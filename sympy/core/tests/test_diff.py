@@ -129,6 +129,15 @@ def test_diff_pow_higher_at_zero():
     assert (sqrt(x + 1)**a).diff(x, 2).subs(a, 4).subs(x, -1) == 2
 
 
+def test_diff_pow_symbolic_nested_at_zero():
+    expr = ((x*(x + 1))**b)**a
+    assert expr.diff(x, 2).subs({a: 1, b: 1}).subs(x, 0) == 2
+    assert expr.diff(x, 4).subs({a: 2, b: 2}).subs(x, 0) == 24
+    assert expr.diff(x, 2).subs({a: 4, b: S.Half}).subs(x, 0) == 2
+    assert expr.diff(x, 2).subs({a: S.Half, b: 2}).subs(x, -S.Half) == -2
+    assert (((x**b)**c)**a).diff(x, 2).subs({a: 2, b: 1, c: 1}).subs(x, 0) == 2
+
+
 def test_diff_pow_product_noncommutative():
     A = Symbol('A', commutative=False)
     B = Symbol('B', commutative=False)

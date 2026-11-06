@@ -28,6 +28,8 @@ def test_cosm1():
 
 def test_powm1():
     assert powm1(x*(x + 1), y).diff(x, 2).subs(y, 1).subs(x, 0) == 2
+    expr = powm1(x*(x + 1), y)**z
+    assert expr.diff(x, 2).rewrite(Pow).subs({y: 1, z: 2}).subs(x, 0) == -2
     cases = {
             powm1(x, y): x**y - 1,
             powm1(x*y, z): (x*y)**z - 1,

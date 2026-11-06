@@ -60,7 +60,7 @@ class powm1(Function):
 
     def _eval_derivative_n_times(self, s, n):
         if isinstance(n, (int, Integer)) and n > 0:
-            return Pow(*self.args).diff(s, n)
+            return Pow(*self.args).diff(s, n, simplify=False)
         return super()._eval_derivative_n_times(s, n)
 
     def fdiff(self, argindex=1):

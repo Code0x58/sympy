@@ -1229,27 +1229,35 @@ class Pow(Expr):
             return super()._eval_derivative_n_times(s, n)
         base = self.base
         multiplier = S.One
-        if base.is_Pow:
-            if not base.exp.is_Rational:
-                return super()._eval_derivative_n_times(s, n)
-            multiplier = base.exp
+        depth = 0
+        while base.is_Pow and base.exp.diff(s) == 0:
+            multiplier *= base.exp
             base = base.base
-            if multiplier == 0:
-                return S.Zero
+            depth += 1
+        if multiplier == 0:
+            return S.Zero
         exponent = multiplier*self.exp
         dbase = base.diff(s)
         if dbase == 0:
             return S.Zero
 
-        # Partial Bell polynomials: B[n + 1, k] = D(B[n, k]) + b'*B[n, k - 1].
         if dbase.has(s):
-            partials = [S.One]
-            for _ in range(n):
-                partials = ([S.Zero] +
-                            [p.diff(s) + dbase*q for p, q in zip(partials[1:], partials)] +
-                            [dbase*partials[-1]])
+            from sympy.functions.combinatorial.numbers import bell
+            derivatives = [dbase] + [base.diff((s, k), simplify=False) for k in range(2, n + 1)]
+            placeholders = [Dummy() for _ in derivatives]
+            substitutions = dict(zip(placeholders, derivatives))
+            partials = [S.Zero] + [bell(n, k, placeholders[:n - k + 1]).xreplace(substitutions)
+                                   for k in range(1, n + 1)]
         else:
             partials = [S.Zero]*n + [dbase**n]
+
+        if depth > 1 or not multiplier.is_Rational:
+            coefficient = S.One
+            polynomial = S.Zero
+            for k in range(1, n + 1):
+                coefficient *= exponent - k + 1
+                polynomial = base*polynomial + coefficient*partials[k]
+            return self*polynomial/base**n
 
         coefficient = S.One
         groups = {}

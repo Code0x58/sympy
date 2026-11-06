@@ -1060,12 +1060,12 @@ class Mul(Expr, AssocOp):
                 scalar = Mul(*commutative)
                 combined = Factors(scalar).as_expr()
                 if combined != scalar:
-                    return reduce(operator.mul, [combined] + noncommutative, S.One).diff((s, n))
+                    return reduce(operator.mul, [combined] + noncommutative, S.One).diff((s, n), simplify=False)
             # https://en.wikipedia.org/wiki/General_Leibniz_rule#More_than_two_factors
             terms = []
             from sympy.ntheory.multinomial import multinomial_coefficients_iterator
             for kvals, c in multinomial_coefficients_iterator(m, n):
-                p = Mul(*[arg.diff((s, k)) for k, arg in zip(kvals, args)])
+                p = Mul(*[arg.diff((s, k), simplify=False) for k, arg in zip(kvals, args)])
                 terms.append(c * self._cancel_derivative_powers(p))
             return Add(*terms)
         from sympy.concrete.summations import Sum
