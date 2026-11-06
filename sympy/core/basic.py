@@ -39,6 +39,11 @@ if TYPE_CHECKING:
             ...
 
 
+def _is_class(value):
+    """Recognize actual classes without consulting instance __class__ hooks."""
+    return issubclass(type(value), type)
+
+
 def _is_standard_number(value):
     """Recognize native numeric types with unmodified value semantics."""
     cls = type(value)
@@ -134,11 +139,11 @@ def _compare_args(left, right):
             c = l.compare(r)
         elif isinstance(r, Basic):
             c = -r.compare(l)
-        elif isinstance(l, type) or isinstance(r, type):
+        elif _is_class(l) or _is_class(r):
             # Class-valued fields follow other fields consistently.
-            if not isinstance(l, type):
+            if not _is_class(l):
                 c = -1
-            elif not isinstance(r, type):
+            elif not _is_class(r):
                 c = 1
             elif l == r:
                 c = 0
@@ -219,7 +224,7 @@ def _args_equal(left, right):
             if not isinstance(b, Basic) or ((a.is_Number or b.is_Number)
                     and type(a) is not type(b)):
                 return False
-        elif isinstance(b, Basic) or isinstance(a, type) != isinstance(b, type):
+        elif isinstance(b, Basic) or _is_class(a) != _is_class(b):
             return False
         elif type(a) is tuple and type(b) is tuple:
             if not _args_equal(a, b):
@@ -319,7 +324,7 @@ def _same_structure(a, b):
                 check_value = False
             elif a_type is list:
                 first, second = a, b
-            elif isinstance(a, type):
+            elif _is_class(a):
                 first = second = ()
             else:
                 a_iterable, b_iterable = iterable(a), iterable(b)
@@ -371,7 +376,7 @@ def _same_structure(a, b):
 
 def _iterable_args(args):
     """Return an iterable argument sequence, or an empty tuple for a leaf."""
-    return args if not isinstance(args, type) and iterable(args, exclude=NotIterable) else ()
+    return args if not _is_class(args) and iterable(args, exclude=NotIterable) else ()
 
 
 def _free_symbol_names(expr):
@@ -848,7 +853,7 @@ class Basic(Printable):
             # The tags order SymPy values, native equality groups, then classes.
             if isinstance(arg, Basic):
                 return 0, arg.sort_key(order)
-            if isinstance(arg, type):
+            if _is_class(arg):
                 return 2, default_sort_key(arg, order=order)
             container = _builtin_container_type(arg)
             kind = 0 if container is frozenset else 1 if container is tuple else 2
@@ -1103,7 +1108,7 @@ class Basic(Printable):
         """
         empty: set[Basic] = set()
         return empty.union(*[a.free_symbols for a in self.args
-                             if not isinstance(a, type)])
+                             if not _is_class(a)])
 
     @property
     def expr_free_symbols(self):
@@ -1150,7 +1155,7 @@ class Basic(Printable):
             return self, restore
 
         rv = self.replace(
-            lambda x: not isinstance(x, type) and hasattr(x, 'bound_symbols'),
+            lambda x: not _is_class(x) and hasattr(x, 'bound_symbols'),
             freshen,
             simultaneous=False)
 
@@ -1195,7 +1200,7 @@ class Basic(Printable):
         canonical = {}
 
         def assign(x, used):
-            if isinstance(x, type):
+            if _is_class(x):
                 return
             used = set(used)
 
@@ -1686,7 +1691,7 @@ class Basic(Printable):
             hit = False
             args = list(self.args)
             for i, arg in enumerate(args):
-                if isinstance(arg, type):
+                if _is_class(arg):
                     arg = new if arg == old else arg
                 else:
                     if not hasattr(arg, '_eval_subs'):
@@ -1811,7 +1816,7 @@ class Basic(Printable):
             args = []
             changed = False
             for a in self.args:
-                if isinstance(a, type):
+                if _is_class(a):
                     args.append(rule.get(a, a))
                     changed |= a in rule
                     continue
@@ -1945,7 +1950,7 @@ class Basic(Printable):
                 iterables: `eq.has_free(*patterns)`'''))
         # try quick test first
         s = {pattern for pattern in patterns
-             if not (isinstance(pattern, type) and issubclass(pattern, Basic))}
+             if not (_is_class(pattern) and issubclass(pattern, Basic))}
         rv = self.has_xfree(s)
         if rv:
             return rv
@@ -1985,7 +1990,7 @@ class Basic(Printable):
             groups = sift(value_patterns, lambda pattern: _IdentityKey(type(pattern)))
             matcher_patterns = (pattern for group in groups.values() for pattern in set(group))
         for i in matcher_patterns:
-            if isinstance(i, type) or not hasattr(i, '_has_matcher'):
+            if _is_class(i) or not hasattr(i, '_has_matcher'):
                 continue
             match = i._has_matcher()
             if any(match(arg) for arg in iterargs(self)):
@@ -2172,13 +2177,13 @@ class Basic(Printable):
 
             if isinstance(value, type) or callable(value):
                 _value = lambda expr, result: value(
-                    *(() if isinstance(expr, type) else expr.args))
+                    *(() if _is_class(expr) else expr.args))
             else:
                 raise TypeError(
                     "given a type, replace() expects another "
                     "type or a callable")
         elif isinstance(query, Basic):
-            _query = lambda expr: not isinstance(expr, type) and expr.match(query)
+            _query = lambda expr: not _is_class(expr) and expr.match(query)
             if exact is None:
                 from .symbol import Wild
                 exact = (len(query.atoms(Wild)) > 1)
@@ -2222,7 +2227,7 @@ class Basic(Printable):
         def walk(rv, F):
             """Apply ``F`` to args and then to result.
             """
-            if isinstance(rv, type):
+            if _is_class(rv):
                 return F(rv)
             raw_args = getattr(rv, 'args', None)
             if raw_args is not None:
@@ -2635,7 +2640,7 @@ class Basic(Printable):
     def _rewrite(self, pattern, rule, method, **hints):
         deep = hints.pop('deep', True)
         if deep:
-            args = [a if isinstance(a, type) else a._rewrite(pattern, rule, method, **hints)
+            args = [a if _is_class(a) else a._rewrite(pattern, rule, method, **hints)
                     for a in self.args]
         else:
             args = self.args

@@ -436,6 +436,39 @@ class TimeClassLiteralFreeQueries:
         self.query()
 
 
+class TimeReportedClassData:
+    params = [False, True]
+    param_names = ['reports_type']
+
+    def setup(self, reports_type):
+        reported = type if reports_type else Basic
+        cls = type('ReportedNode', (Basic,), {
+            '__class__': property(lambda self: reported),
+            'func': property(lambda self: type(self)),
+        })
+        self.x, self.y = Symbol('reported_data_x'), Symbol('reported_data_y')
+        self.node = cls(self.x)
+        self.source = Basic(self.node)
+        self.rule = {self.x: self.y}
+        expected = Basic(cls(self.y))
+        assert self.source.free_symbols == {self.x}
+        assert self.source.has_free(self.node)
+        assert self.source.xreplace(self.rule) == expected
+        assert self.source.replace(self.x, self.y) == expected
+
+    def time_free_symbols(self, reports_type):
+        self.source.free_symbols
+
+    def time_has_free(self, reports_type):
+        self.source.has_free(self.node)
+
+    def time_xreplace(self, reports_type):
+        self.source.xreplace(self.rule)
+
+    def time_replace(self, reports_type):
+        self.source.replace(self.x, self.y)
+
+
 class TimeClassPatternAliases:
     def setup(self):
         self.source = Basic(Symbol('class_alias_query_x'))

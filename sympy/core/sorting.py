@@ -125,14 +125,14 @@ def default_sort_key(item, order=None):
     ordered, sympy.core.expr.Expr.as_ordered_factors, sympy.core.expr.Expr.as_ordered_terms
 
     """
-    from .basic import Basic, _get_type_attribute
+    from .basic import Basic, _is_class, _get_type_attribute
     from .singleton import S
 
     if isinstance(item, Basic):
         return item.sort_key(order=order)
 
     cls_name = None
-    if isinstance(item, type):
+    if _is_class(item):
         from .function import UndefinedFunction, _class_order_key, _get_comparison_key
         if (isinstance(item, UndefinedFunction)
                 and type.__dict__['__dict__'].__get__(item).get('_is_factory') is True):
@@ -169,7 +169,7 @@ def default_sort_key(item, order=None):
                 # e.g. lambda x: x
                 pass
             else:
-                if isinstance(item, (Basic, type)):
+                if isinstance(item, Basic) or _is_class(item):
                     # e.g int -> Integer
                     return default_sort_key(item, order=order)
 

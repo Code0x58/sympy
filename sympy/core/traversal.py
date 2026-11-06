@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterator
 
-from .basic import Basic, _iterable_args
+from .basic import Basic, _is_class, _iterable_args
 from .sorting import ordered
 from .sympify import sympify
 from sympy.utilities.iterables import iterable
@@ -33,7 +33,7 @@ def iterargs(expr):
         yield i
         if isinstance(i, Basic):
             args.extend(i.args)
-        elif not isinstance(i, type):
+        elif not _is_class(i):
             args.extend(_iterable_args(getattr(i, 'args', ())))
 
 
@@ -61,7 +61,7 @@ def iterfreeargs(expr, _first=True):
     for i in args:
         yield i
         is_basic = isinstance(i, Basic)
-        if not is_basic and isinstance(i, type):
+        if not is_basic and _is_class(i):
             continue
         # The canonical root is filtered by its caller; nested scopes are separate.
         if (_first or i is not expr) and getattr(i, 'bound_symbols', ()):
@@ -69,7 +69,7 @@ def iterfreeargs(expr, _first=True):
             bound = getattr(canonical, 'bound_symbols', None)
             void = bound if bound is not None else i.canonical_variables.values()
             for arg in iterfreeargs(canonical, _first=False):
-                has = None if isinstance(arg, type) else getattr(arg, 'has', None)
+                has = None if _is_class(arg) else getattr(arg, 'has', None)
                 if has is None or not has(*void):
                     yield arg
             continue
@@ -147,7 +147,7 @@ class preorder_traversal:
                     args = ordered(args)
             for arg in args:
                 yield from self._preorder_traversal(arg, keys)
-        elif not isinstance(node, type) and iterable(node):
+        elif not _is_class(node) and iterable(node):
             for item in node:
                 yield from self._preorder_traversal(item, keys)
 
@@ -312,7 +312,7 @@ def postorder_traversal(node, keys=None):
                 args = ordered(args)
         for arg in args:
             yield from postorder_traversal(arg, keys)
-    elif not isinstance(node, type) and iterable(node):
+    elif not _is_class(node) and iterable(node):
         for item in node:
             yield from postorder_traversal(item, keys)
     yield node

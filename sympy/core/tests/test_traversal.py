@@ -19,6 +19,33 @@ b3 = Basic(b2)
 b21 = Basic(b2, b1)
 
 
+def test_traversal_reported_class_data():
+    class Sequence(list):
+        @property
+        def __class__(self):
+            return type
+
+    class Node:
+        def __init__(self, args):
+            self.args = args
+
+        @property
+        def __class__(self):
+            return type
+
+        def __iter__(self):
+            return iter(self.args)
+
+    x = Symbol('reported_x')
+    for args in ((x,), Sequence([x])):
+        node = Node(args)
+        assert list(iterargs(node)) == [node, x]
+        assert list(iterfreeargs(node)) == [node, x]
+        assert list(preorder_traversal(node)) == [node, x]
+        assert list(postorder_traversal(node)) == [x, node]
+        assert Basic(node).has_free(x)
+
+
 def test_preorder_traversal():
     expr = Basic(b21, b3)
     assert list(

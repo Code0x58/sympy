@@ -837,6 +837,29 @@ def test_Subs_evalf_options(method):
         lambda: getattr(source, method)(subs=[(x, 1)])).value.args == ('subs must be given as a dictionary',)
 
 
+def test_Subs_reported_class_evaluator():
+    class Reported(Expr):
+        @property
+        def __class__(self):
+            return type
+
+        @property
+        def func(self):
+            return type(self)
+
+        def doit(self, **hints):
+            return S.Zero if self.args[0] == x else S.One
+
+    first, second = Subs(Reported(x), x, 0), Subs(Reported(y), y, 0)
+    assert first.doit() == 0 and second.doit() == 1
+    assert first != second
+    assert first.sort_key() != second.sort_key()
+    point = Reported(y)
+    request = Subs(f(x), x, point)
+    assert request.free_symbols == {y}
+    assert request.subs(y, z).point[0].args == (z,)
+
+
 def test_Subs_bound_placeholder_identity():
     variable = Symbol('_1')
     first = Subs(f(variable, x), (variable, x), (1, 0))

@@ -43,7 +43,7 @@ from weakref import ref, WeakKeyDictionary
 
 from .add import Add
 from .assumptions import _assume_defined
-from .basic import (Atom, Basic, _atomic, _is_standard_number,
+from .basic import (Atom, Basic, _atomic, _is_class, _is_standard_number,
                     _get_postprocessors_for_type, _get_type_attribute,
                     _builtin_container_type, _tuple_comparison_type)
 from .cache import cacheit, cached_property, cacheit_by_identity, _IdentityKey as _ClassIdentity
@@ -1024,8 +1024,8 @@ class _ComparisonKey:
             return NotImplemented
         if self is other:
             return False
-        self_is_class = isinstance(self.value, type)
-        other_is_class = isinstance(other.value, type)
+        self_is_class = _is_class(self.value)
+        other_is_class = _is_class(other.value)
         if self_is_class != other_is_class:
             return self_is_class < other_is_class
         return self.order < other.order
@@ -1066,7 +1066,7 @@ if hasattr(os, 'register_at_fork'):
 
 def _get_comparison_key(value):
     candidate = _ComparisonKey(value)
-    if isinstance(value, type):
+    if _is_class(value):
         # Register the actual alias even when interning returns another class.
         candidate.order = _get_class_order_key(value, candidate._hash)
     with _comparison_key_lock:
@@ -2819,7 +2819,7 @@ class Subs(Expr):
         for i in self._ordered_indices():
             variable, point = self.variables[i], self.point[i]
             free.discard(variable)
-            if not isinstance(point, type):
+            if not _is_class(point):
                 free.update(point.free_symbols)
         return free
 
@@ -2868,7 +2868,7 @@ class Subs(Expr):
             return key
         derivative_counts = []
         for node in iterargs(self.expr):
-            if isinstance(node, type):
+            if _is_class(node):
                 continue
             if getattr(node, 'bound_symbols', ()):
                 return key
@@ -2926,13 +2926,13 @@ class Subs(Expr):
 
     def _eval_subs(self, old, new):
         def subs(arg):
-            if isinstance(arg, type):
+            if _is_class(arg):
                 return new if arg == old else arg
             return arg._subs(old, new)
 
         def needs_mask(variables):
-            return (not isinstance(old, type) and old._has(iterargs, *variables)
-                    or not isinstance(new, type) and new._has(iterargs, Dummy, *variables))
+            return (not _is_class(old) and old._has(iterargs, *variables)
+                    or not _is_class(new) and new._has(iterargs, Dummy, *variables))
 
         pt = list(self.point)
         if old in self.variables:
@@ -2957,15 +2957,15 @@ class Subs(Expr):
         if (all(_is_ordinary_symbol(variable) for variable in v)
                 and (len(v) == 1 or type(self) is Subs and not has_dups(v))):
             follow_points = len(v) > 1 and needs_mask(v)
-            free = set() if isinstance(self.expr, type) else set(self.expr.free_symbols)
+            free = set() if _is_class(self.expr) else set(self.expr.free_symbols)
             for i, variable in enumerate(v):
                 if variable in free:
                     active.append((i, variable))
                     free.discard(variable)
                     # An earlier point can introduce a later binding.
-                    if follow_points and i + 1 < len(v) and not isinstance(pt[i], type):
+                    if follow_points and i + 1 < len(v) and not _is_class(pt[i]):
                         free.update(pt[i].free_symbols)
-        if (len(v) == 1 and active and not isinstance(old, type)
+        if (len(v) == 1 and active and not _is_class(old)
                 and v[0] in old.free_symbols):
             expr = self.expr
         elif (active and (
@@ -2976,7 +2976,7 @@ class Subs(Expr):
                 def unchanged(arg):
                     from .power import Pow
                     for node in iterargs(arg):
-                        if isinstance(node, type):
+                        if _is_class(node):
                             if node == old:
                                 return False
                             continue
@@ -3063,7 +3063,7 @@ class Subs(Expr):
                            for _, variable in active}
 
             def mask(arg, start):
-                if isinstance(arg, type):
+                if _is_class(arg):
                     return arg
                 for i, variable in active:
                     if i < start:
@@ -3071,7 +3071,7 @@ class Subs(Expr):
                     rule = {variable: renamed[variable]}
                     # Locally bound occurrences belong to their own node.
                     rule.update((node, node) for node in iterargs(arg)
-                        if not isinstance(node, type)
+                        if not _is_class(node)
                         and variable in getattr(node, 'bound_symbols', ())
                         and variable not in node.free_symbols)
                     with evaluate(False):

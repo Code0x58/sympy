@@ -5,6 +5,7 @@ import collections
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from typing import TypeVar, Generic
+from unittest.mock import Mock
 
 from sympy.assumptions.ask import Q
 from sympy.core.basic import (Basic, Atom, as_Basic,
@@ -32,6 +33,127 @@ b2 = Basic(b1)
 b3 = Basic(b2)
 b21 = Basic(b2, b1)
 T = TypeVar('T')
+
+
+class _ReportedClassNode(Basic):
+    reported_class = type
+
+    @property
+    def __class__(self):
+        return self.reported_class
+
+    @property
+    def func(self):
+        return type(self)
+
+    def _eval_rewrite_as_reported(self, *args, **hints):
+        return self.func(S.One)
+
+
+def test_reported_class_expression_operations():
+    x, y = symbols('reported_x reported_y')
+    for wrap in (lambda value: value, Basic, lambda value: Basic(Basic(value))):
+        source = wrap(_ReportedClassNode(x))
+        expected = wrap(_ReportedClassNode(y))
+        assert source.free_symbols == {x}
+        assert _aresame(source.subs(x, y), expected)
+        assert _aresame(source.xreplace({x: y}), expected)
+        assert _aresame(source.replace(x, y), expected)
+        assert _aresame(source.rewrite('reported'), wrap(_ReportedClassNode(S.One)))
+        bound = wrap(_ReportedClassNode(Integral(x, (x, 0, 1))))
+        canonical = Symbol('_0')
+        assert bound.as_dummy() == wrap(
+            _ReportedClassNode(Integral(canonical, (canonical, 0, 1))))
+
+
+def test_reported_class_type_replacement():
+    x, y = symbols('reported_x reported_y')
+    for wrap in (lambda value: value, Basic, lambda value: Basic(Basic(value))):
+        calls = []
+
+        def replace(*children):
+            calls.append(children)
+            return _ReportedClassNode(y)
+
+        result = wrap(_ReportedClassNode(x)).replace(_ReportedClassNode, replace)
+        assert _aresame(result, wrap(_ReportedClassNode(y)))
+        assert calls == [(x,)]
+
+
+def test_has_free_reported_class_patterns():
+    x = Symbol('reported_pattern_x')
+    patterns = (_ReportedClassNode(x), Mock(spec=type))
+    for pattern in patterns:
+        assert isinstance(pattern, type)
+        for wrap in (Basic, lambda value: Basic(Basic(value))):
+            source = wrap(pattern)
+            assert source.has_free(pattern)
+            assert source.has_free(pattern)
+            assert source.has_free(Symbol, pattern)
+            assert source.has_xfree({pattern})
+
+    class ClassProxy:
+        __bases__ = (Basic,)
+
+        @property
+        def __class__(self):
+            return type
+
+        def __instancecheck__(self, value):
+            return isinstance(value, Basic)
+
+    proxy = ClassProxy()
+    assert Basic().has(proxy)
+    assert Basic().has_free(proxy)
+
+
+def test_reported_class_native_fields():
+    class Scalar:
+        __sympy__ = True
+
+        def __init__(self, value, reported=False):
+            self.value = value
+            self.reported = reported
+
+        @property
+        def __class__(self):
+            return type if self.reported else type(self)
+
+        def __hash__(self):
+            return hash(self.value)
+
+        def __eq__(self, other):
+            return type(self) is type(other) and self.value == other.value
+
+        def __lt__(self, other):
+            return self.value < other.value
+
+        def __gt__(self, other):
+            return self.value > other.value
+
+        def __str__(self):
+            return str(self.value)
+
+    first, alias, other = [Basic(Scalar(value, reported))
+                          for value, reported in ((0, True), (0, False), (1, False))]
+    assert first == alias and hash(first) == hash(alias)
+    assert first.compare(alias) == alias.compare(first) == 0
+    assert first.compare(other) == alias.compare(other) == -1
+    assert first.sort_key() == alias.sort_key()
+    assert default_sort_key(Scalar(0, True))[1] == (1, ('0',))
+
+
+def test_reported_class_native_containers():
+    for container in (tuple, frozenset):
+        class Reported(container):
+            @property
+            def __class__(self):
+                return type
+
+        first, alias = Basic(Reported([1, 2])), Basic(container([1, 2]))
+        assert first == alias and hash(first) == hash(alias)
+        assert first.compare(alias) == alias.compare(first) == 0
+        assert first.sort_key() == alias.sort_key()
 
 
 def test__aresame():
