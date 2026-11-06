@@ -443,6 +443,166 @@ def test_cacheit_by_identity_python_lookup_wrapper(monkeypatch):
             assert bool(lookups) == (mode != 'no')
 
 
+def test_cacheit_by_identity_debug_verification_typeerror(monkeypatch):
+    monkeypatch.setenv('SYMPY_USE_CACHE', 'debug')
+    for size in ('0', '2', 'None'):
+        monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
+        scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+        for phase in ('body', 'adaptation'):
+            for kind in ('function', 'partial', 'callable', 'bound'):
+                for arguments in ((object(), 0), ([], 0), (object(), [])):
+                    for recover in (False, True):
+                        error = TypeError('unhashable type: intentional')
+                        constructions, accesses, calls = [], [], []
+
+                        class Key:
+                            def __init__(self, receiver, *args):
+                                constructions.append(receiver)
+                                self.receiver = receiver
+
+                            def __hash__(self):
+                                return hash(self.receiver)
+
+                            @property
+                            def value(self):
+                                accesses.append(self.receiver)
+                                if (phase == 'adaptation' and len(accesses) >= 2
+                                        and (not recover or len(accesses) == 2)):
+                                    raise error
+                                return self.receiver
+
+                        def fail(receiver, value):
+                            calls.append(receiver)
+                            if (phase == 'body' and len(calls) >= 2
+                                    and (not recover or len(calls) == 2)):
+                                raise error
+                            return 42
+
+                        class Failure:
+                            def __call__(self, receiver, value):
+                                return fail(receiver, value)
+
+                            @property
+                            def __code__(self):
+                                raise AssertionError('user code must not be inspected')
+
+                        function = {'function': fail, 'partial': partial(fail),
+                                    'callable': Failure(), 'bound': Failure().__call__}[kind]
+                        cached = scope['cacheit_by_identity'](function, key=Key)
+                        assert unwrap(cached) is unwrap(function)
+                        with raises(TypeError) as caught:
+                            cached(*arguments)
+                        assert caught.value is error
+                        assert constructions == [arguments[0]]
+                        assert accesses == [arguments[0]]*2
+                        assert calls == [arguments[0]]*(2 if phase == 'body' else 1)
+
+
+def test_cacheit_by_identity_debug_builtin_typeerror(monkeypatch):
+    monkeypatch.setenv('SYMPY_USE_CACHE', 'debug')
+    for size in ('0', '2', 'None'):
+        monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
+        scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+        for hashable in (False, True):
+            for recover in (False, True):
+                error = TypeError('unhashable type: intentional')
+                calls = []
+
+                class Value:
+                    __hash__ = object.__hash__ if hashable else None
+
+                    def __abs__(self):
+                        calls.append(self)
+                        if len(calls) >= 2 and (not recover or len(calls) == 2):
+                            raise error
+                        return 42
+
+                cached = scope['cacheit_by_identity'](abs)
+                assert unwrap(cached) is abs
+                receiver = Value()
+                with raises(TypeError) as caught:
+                    cached(receiver)
+                assert caught.value is error
+                assert calls == [receiver]*2
+
+
+def test_cacheit_by_identity_metadata_access(monkeypatch):
+    for mode in ('yes', 'no', 'debug'):
+        for size in ('0', '2', 'None'):
+            monkeypatch.setenv('SYMPY_USE_CACHE', mode)
+            monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
+            scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+            reads = []
+            marker = object()
+
+            class Callable:
+                @property
+                def __name__(self):
+                    reads.append('name')
+                    return 'identify'
+
+                @property
+                def __dict__(self):
+                    reads.append('dict')
+                    return {'marker': marker}
+
+                def __call__(self, receiver):
+                    return 42
+
+            function = Callable()
+            cached = scope['cacheit_by_identity'](function)
+            assert reads == ['name', 'dict']
+            assert cached.__name__ == 'identify'
+            assert cached.marker is marker
+            assert unwrap(cached) is function
+            assert cached(object()) == 42
+            assert reads == ['name', 'dict']
+
+
+def test_cacheit_by_identity_debug_cache_consistency(monkeypatch):
+    monkeypatch.setenv('SYMPY_USE_CACHE', 'debug')
+    for size in ('0', '2', 'None'):
+        monkeypatch.setenv('SYMPY_CACHE_SIZE', size)
+        scope = run_path(str(Path(__file__).parents[1] / 'cache.py'))
+        constructions = []
+
+        class Key:
+            def __init__(self, receiver):
+                constructions.append(receiver)
+                self.value = receiver
+
+            def __hash__(self):
+                return id(self.value)
+
+            def __eq__(self, other):
+                return type(self) is type(other) and self.value is other.value
+
+        state = [0]
+        unexpected = []
+
+        def current(receiver):
+            return state[0]
+
+        current.cache_clear = lambda: unexpected.append('cache_clear')
+        current.cache_info = lambda: unexpected.append('cache_info')
+        cached = scope['cacheit_by_identity'](current, key=Key)
+        assert cached.cache_clear is current.cache_clear
+        assert cached.cache_info is current.cache_info
+        receiver = object()
+        assert cached(receiver) == 0
+        state[0] = 1
+        if size == '0':
+            assert cached(receiver) == 1
+        else:
+            with raises(RuntimeError, match='Returned values are not the same'):
+                cached(receiver)
+        assert constructions == [receiver]*2
+        scope['clear_cache']()
+        assert not unexpected
+        assert cached(receiver) == 1
+        assert constructions == [receiver]*3
+
+
 @XFAIL
 def test_cacheit_function_unhashable_typeerror(monkeypatch):
     monkeypatch.setenv('SYMPY_USE_CACHE', 'yes')

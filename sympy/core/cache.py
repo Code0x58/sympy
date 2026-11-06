@@ -99,7 +99,7 @@ def _is_unhashable_error(error, cached_code=None, lookup_code=None):
     return origin is None or origin.tb_frame.f_code is not cached_code
 
 
-def __cacheit(maxsize, *, by_identity=False):
+def __cacheit(maxsize, *, by_identity=False, call_boundary=False):
     """caching decorator.
 
         important: the result of cached function must be *immutable*
@@ -128,13 +128,16 @@ def __cacheit(maxsize, *, by_identity=False):
         else:
             cached = func
         cfunc = lru_cache(maxsize, typed=True)(cached)
-
-        if by_identity:
+        # Only private receiver adapters supply a call boundary.
+        if by_identity or call_boundary:
             cached_code = cached.__code__
             lookup_code = getattr(cfunc.__call__, '__code__', None)
             if lookup_code is None:
                 lookup_code = getattr(cfunc, '__code__', None)
+        else:
+            cached_code = lookup_code = None
 
+        if by_identity:
             @wraps(func)
             def wrapper(*args, **kwargs):
                 if not args:
@@ -152,7 +155,7 @@ def __cacheit(maxsize, *, by_identity=False):
                 try:
                     retval = cfunc(*args, **kwargs)
                 except TypeError as e:
-                    if not _is_unhashable_error(e):
+                    if not _is_unhashable_error(e, cached_code, lookup_code):
                         raise
                     retval = func(*args, **kwargs)
                 return retval
@@ -175,8 +178,8 @@ def __cacheit_nocache(func):
 
 def __cacheit_debug(maxsize):
     """cacheit + code to check cache consistency"""
-    def func_wrapper(func):
-        cfunc = __cacheit(maxsize)(func)
+    def func_wrapper(func, *, _call_boundary=False):
+        cfunc = __cacheit(maxsize, call_boundary=_call_boundary)(func)
 
         @wraps(func)
         def wrapper(*args, **kw_args):
@@ -243,10 +246,15 @@ def cacheit_by_identity(func, *, key=_ReceiverIdentityKey):
     identity_cache = getattr(cacheit, '_by_identity', None)
     if identity_cache is not None:
         return identity_cache(func, _identity_key=key)
-    @cacheit
-    @wraps(func)
+    @wraps(func, updated=())
     def cached(self_key, /, *args, **kwargs):
         return func(self_key.value, *args, **kwargs)
+
+    # Custom function attributes belong on the public wrapper.
+    attributes = {}
+    attributes.update(getattr(func, '__dict__', {}))
+    cached = (cacheit(cached, _call_boundary=True) if USE_CACHE == 'debug'
+              else cacheit(cached))
 
     @wraps(cached)
     def wrapper(*args, **kwargs):
@@ -254,6 +262,7 @@ def cacheit_by_identity(func, *, key=_ReceiverIdentityKey):
             return cached(key(*args), *args[1:], **kwargs)
         return func(**kwargs)
 
+    wrapper.__dict__.update(attributes)
     wrapper.__wrapped__ = func
     return wrapper
 
