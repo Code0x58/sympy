@@ -240,6 +240,33 @@ class TimeStructuralQueries:
         self.source.has_free(self.pattern)
 
 
+class TimeReplacements:
+    params = ['predicate', 'type', 'expression']
+    param_names = ['query']
+
+    def setup(self, query):
+        if query == 'expression':
+            original, replacement = Symbol('replace_x'), Symbol('replace_y')
+            self.query, self.value = original, replacement
+        else:
+            class Literal:
+                args = ()
+
+            class Replacement:
+                args = ()
+
+            original, replacement = Literal, Replacement
+            self.query = (lambda node: node is original) if query == 'predicate' else type
+            self.value = (lambda node: replacement) if query == 'predicate' else (lambda: replacement)
+
+        self.source = Basic(original)
+        result = self.source.replace(self.query, self.value)
+        assert result.args == (replacement,)
+
+    def time_replace(self, query):
+        self.source.replace(self.query, self.value)
+
+
 class TimeCacheFallback:
     params = [['value', 'identity'], ['hashable', 'receiver', 'argument']]
     param_names = ['cache', 'unhashable']

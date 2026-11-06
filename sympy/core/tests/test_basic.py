@@ -1476,6 +1476,114 @@ def test_transform_native_leaf_arguments():
         assert source.replace(lambda node: node is leaf, lambda node: x) == expected
 
 
+def test_replace_class_predicates():
+    class Literal:
+        args = ()
+
+    class Replacement:
+        args = ()
+
+    class LiteralBasic(Basic):
+        pass
+
+    class ReplacementBasic(Basic):
+        pass
+
+    x = Symbol('x')
+    classes = [(Literal, Replacement), (LiteralBasic, ReplacementBasic),
+               (Function('literal_replace'), Function('replacement_replace'))]
+    wrappers = [Basic, lambda item: Basic(item, x),
+                lambda item: Basic(Basic(item), x)]
+    for original, replacement in classes:
+        for wrap in wrappers:
+            for simultaneous in (False, True):
+                for mapping in (False, True):
+                    visits = []
+
+                    def query(node):
+                        visits.append(node)
+                        return node is original
+
+                    result = wrap(original).replace(query, lambda node: replacement,
+                        simultaneous=simultaneous, map=mapping)
+                    if mapping:
+                        result, changes = result
+                        assert changes == {original: replacement}
+                    assert _aresame(result, wrap(replacement))
+                    assert sum(node is original for node in visits) == 1
+
+
+def test_replace_class_type_queries():
+    class Meta(type):
+        def __getattribute__(cls, name):
+            if name == 'args':
+                raise AssertionError('classes have no expression children')
+            return super().__getattribute__(name)
+
+    class Literal(metaclass=Meta):
+        pass
+
+    class Replacement(metaclass=Meta):
+        pass
+
+    x = Symbol('x')
+    for wrap in (Basic, lambda item: Basic(item, x),
+                 lambda item: Basic(Basic(item), x)):
+        for simultaneous in (False, True):
+            for mapping in (False, True):
+                calls = []
+
+                def value(*children):
+                    calls.append(children)
+                    return Replacement
+
+                result = wrap(Literal).replace(Meta, value,
+                    simultaneous=simultaneous, map=mapping)
+                if mapping:
+                    result, changes = result
+                    assert changes == {Literal: Replacement}
+                assert _aresame(result, wrap(Replacement))
+                assert calls == [()]
+
+
+def test_replace_class_expression_queries_and_bindings():
+    x, y, canonical = symbols('x y _0')
+    for literal in (Basic, Symbol, Subs, Integral, Function('literal_binding')):
+        source = Basic(literal, Integral(x, (x, 0, 1)), x)
+        assert source.replace(x, y) == Basic(literal, Integral(y, (y, 0, 1)), y)
+        assert source.as_dummy() == Basic(literal, Integral(canonical, (canonical, 0, 1)), x)
+
+
+def test_replace_class_callback_errors():
+    class Literal:
+        args = ()
+
+    for literal in (Literal, Symbol):
+        for phase in ('query', 'value'):
+            for simultaneous in (False, True):
+                for mapping in (False, True):
+                    error = ValueError('class replacement failed')
+                    calls = []
+
+                    def query(node):
+                        if node is literal:
+                            calls.append(node)
+                            if phase == 'query':
+                                raise error
+                            return True
+                        return False
+
+                    def value(node):
+                        calls.append(node)
+                        raise error
+
+                    with raises(ValueError) as caught:
+                        Basic(literal).replace(query, value,
+                            simultaneous=simultaneous, map=mapping)
+                    assert caught.value is error
+                    assert calls == [literal]*(1 if phase == 'query' else 2)
+
+
 def test_replace_native_child_sequences():
     x, y, z = symbols('x y z')
     for factory in (tuple, list, iter):

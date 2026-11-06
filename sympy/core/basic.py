@@ -1150,7 +1150,7 @@ class Basic(Printable):
             return self, restore
 
         rv = self.replace(
-            lambda x: hasattr(x, 'bound_symbols'),
+            lambda x: not isinstance(x, type) and hasattr(x, 'bound_symbols'),
             freshen,
             simultaneous=False)
 
@@ -2006,6 +2006,8 @@ class Basic(Printable):
         changes made are targeted only once. If this is not desired or causes
         problems, ``simultaneous`` can be set to False.
 
+        Classes stored in the arguments are treated as atomic nodes.
+
         In addition, if an expression containing more than one Wild symbol
         is being used to match subexpressions and the ``exact`` flag is None
         it will be set to True so the match will only succeed if all non-zero
@@ -2165,13 +2167,14 @@ class Basic(Printable):
             _query = lambda expr: isinstance(expr, query)
 
             if isinstance(value, type) or callable(value):
-                _value = lambda expr, result: value(*expr.args)
+                _value = lambda expr, result: value(
+                    *(() if isinstance(expr, type) else expr.args))
             else:
                 raise TypeError(
                     "given a type, replace() expects another "
                     "type or a callable")
         elif isinstance(query, Basic):
-            _query = lambda expr: expr.match(query)
+            _query = lambda expr: not isinstance(expr, type) and expr.match(query)
             if exact is None:
                 from .symbol import Wild
                 exact = (len(query.atoms(Wild)) > 1)
@@ -2216,7 +2219,7 @@ class Basic(Printable):
             """Apply ``F`` to args and then to result.
             """
             if isinstance(rv, type):
-                return rv
+                return F(rv)
             raw_args = getattr(rv, 'args', None)
             if raw_args is not None:
                 args = raw_args if isinstance(rv, Basic) else tuple(_iterable_args(raw_args))
