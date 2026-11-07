@@ -703,8 +703,18 @@ class Function(Application, Expr):
                 return super()._eval_derivative_n_times(s, n)
             # Keep each inner derivative as an independent polynomial factor.
             result = Poly(result, *generators).as_expr()
+            coordinates = {args[i]: arg for i, arg in varying}
+            partials = {}
+            for derivative in result.atoms(Derivative):
+                bound = {v for d in derivative.atoms(Derivative)
+                         for v, _ in d.variable_count}
+                variables = tuple(v for v in coordinates if v in bound)
+                if variables:
+                    fixed = {v: arg for v, arg in coordinates.items() if v not in bound}
+                    partials[derivative] = Subs(derivative.xreplace(fixed), variables,
+                                               tuple(coordinates[v] for v in variables))
             # Sequential substitution preserves the bindings of formal partials.
-            return result.subs(substitutions)
+            return result.xreplace(partials).subs(substitutions)
 
         i, arg = varying[0]
         t = Dummy(**assumptions(arg))
@@ -2442,18 +2452,17 @@ class Subs(Expr):
             p = CustomStrPrinter(settings)
             return p.doprint(expr)
         while 1:
-            s_pts = {p: Symbol(pre + mystr(p)) for p in pts}
+            s_pts = {p: _SubsPoint(pre + mystr(p), p) if isinstance(p, Basic)
+                     else Symbol(pre + mystr(p)) for p in pts}
             reps = [(v, s_pts[p])
                 for v, p in zip(variables, point)]
-            # if any underscore-prepended symbol is already a free symbol
-            # and is a variable with a different point value, then there
-            # is a clash, e.g. _0 clashes in Subs(_0 + _1, (_0, _1), (1, 0))
+            # Avoid collisions with free symbols or variables mapped to other
+            # point values, e.g. _0 clashes in Subs(_0 + _1, (_0, _1), (1, 0))
             # because the new symbol that would be created is _1 but _1
             # is already mapped to 0 so __0 and __1 are used for the new
             # symbols
-            if any(r in expr.free_symbols and
-                   r in variables and
-                   Symbol(pre + mystr(point[variables.index(r)])) != r
+            if any(r in expr.free_symbols and (r not in variables or
+                   s_pts[point[variables.index(r)]] != r)
                    for _, r in reps):
                 pre += "_"
                 continue
@@ -3679,3 +3688,20 @@ def nfloat(expr, n=15, exponent=False, dkeys=False):
 
 
 from .symbol import Dummy, Symbol
+
+
+class _SubsPoint(Symbol):
+    """An opaque evaluation point for Subs comparison."""
+
+    __slots__ = ('point',)
+
+    def __new__(cls, name, point):
+        obj = Symbol.__xnew__(cls, name)
+        obj.point = point
+        return obj
+
+    def _hashable_content(self):
+        return super()._hashable_content() + (self.point,)
+
+    def __getnewargs_ex__(self):
+        return (self.name, self.point), {}

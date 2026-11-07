@@ -632,6 +632,27 @@ def test_higher_derivative_formal_partials_coincident_arguments():
     assert result.subs(x, 1) == 60
 
 
+def test_higher_derivative_formal_partial_cancellation():
+    a = Symbol('a')
+    result = (f(a*x, x) - f(x, a*x)).diff(x, 2).subs(a, 1).subs(x, 0)
+    assert result == 0
+
+
+def test_Subs_partial_point_symbol_collision():
+    point_symbol = Symbol('_0')
+    partial = Subs(Derivative(f(x, point_symbol), x), x, 0)
+    total = Subs(Derivative(f(x, x), x), x, 0)
+    assert (total - partial).subs(f, Lambda((t, w), t + w)).doit() == 1
+
+
+@pytest.mark.parametrize('point', [y, x*y], ids=['symbol', 'product'])
+def test_Subs_point_assumptions(point):
+    y_real = Symbol('y', real=True)
+    generic = Subs(Derivative(f(x), x), x, point)
+    real = Subs(Derivative(f(x), x), x, point.xreplace({y: y_real}))
+    assert generic != real
+
+
 def test_doitdoit():
     done = Derivative(f(x, g(x)), x, g(x)).doit()
     assert done == done.doit()
