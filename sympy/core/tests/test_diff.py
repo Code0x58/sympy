@@ -131,6 +131,11 @@ def test_diff_pow_higher_at_zero():
     assert (((x*(x + 1))**Rational(3, 2))**a).diff(x, 4).subs(a, 2).subs(x, 0) == 72
 
 
+def test_diff_pow_zero_scale():
+    assert sqrt(a*x).diff(x, 2).subs(a, 0) == 0
+    assert sqrt(a*(x**2 + 1)).diff(x, 2).subs(a, 0) == 0
+
+
 def test_diff_pow_reciprocal_product_at_zero():
     expr = x*(x + 1)
     assert ((expr**-2)**a).diff(x, 2).subs(a, -1).subs(x, 0) == 2

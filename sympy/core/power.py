@@ -1231,9 +1231,13 @@ class Pow(Expr):
         base = self.base
         multiplier = S.One
         depth = 0
+        # Keep independent factors in self so their zeros do not become poles.
+        constant, base = base.as_independent(s, as_Add=False)
+        scaled = constant != 1
         while base.is_Pow and base.exp.diff(s) == 0:
             multiplier *= base.exp
-            base = base.base
+            constant, base = base.base.as_independent(s, as_Add=False)
+            scaled |= constant != 1
             depth += 1
         if base.is_Mul and all(e.is_Integer and e < 0 for e in base.as_powers_dict().values()):
             multiplier = -multiplier
@@ -1256,7 +1260,7 @@ class Pow(Expr):
         else:
             partials = [S.Zero]*n + [dbase**n]
 
-        if depth > 1 or not multiplier.is_Rational:
+        if scaled or depth > 1 or not multiplier.is_Rational:
             coefficient = S.One
             polynomial = S.Zero
             for k in range(1, n + 1):
