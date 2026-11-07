@@ -10,7 +10,7 @@ from .basic import Basic, Atom
 from .singleton import S
 from .evalf import EvalfMixin, pure_complex, DEFAULT_MAXPREC
 from .decorators import call_highest_priority, sympify_method_args, sympify_return
-from .cache import cacheit
+from .cache import cacheit, cacheit_by_identity
 from .logic import fuzzy_or, fuzzy_not
 from .intfunc import mod_inverse
 from .sorting import default_sort_key
@@ -164,7 +164,7 @@ class Expr(Basic, EvalfMixin):
         """
         return False
 
-    @cacheit
+    @cacheit_by_identity
     def sort_key(self, order=None):
 
         coeff, expr = self.as_coeff_Mul()

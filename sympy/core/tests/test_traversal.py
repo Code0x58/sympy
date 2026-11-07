@@ -2,21 +2,48 @@ from __future__ import annotations
 from sympy.core.basic import Basic
 from sympy.core.containers import Tuple
 from sympy.core.sorting import default_sort_key
-from sympy.core.symbol import symbols
+from sympy.core.symbol import Symbol, symbols
 from sympy.core.singleton import S
-from sympy.core.function import expand, Function
+from sympy.core.function import expand, Function, Lambda
 from sympy.core.numbers import I
 from sympy.integrals.integrals import Integral
 from sympy.polys.polytools import factor
 from sympy.core.traversal import preorder_traversal, use, postorder_traversal, iterargs, iterfreeargs
 from sympy.functions.elementary.piecewise import ExprCondPair, Piecewise
-from sympy.testing.pytest import warns_deprecated_sympy
-from sympy.utilities.iterables import capture
+from sympy.testing.pytest import raises, warns_deprecated_sympy
+from sympy.utilities.iterables import capture, NotIterable
 
 b1 = Basic()
 b2 = Basic(b1)
 b3 = Basic(b2)
 b21 = Basic(b2, b1)
+
+
+def test_traversal_reported_class_data():
+    class Sequence(list):
+        @property
+        def __class__(self):
+            return type
+
+    class Node:
+        def __init__(self, args):
+            self.args = args
+
+        @property
+        def __class__(self):
+            return type
+
+        def __iter__(self):
+            return iter(self.args)
+
+    x = Symbol('reported_x')
+    for args in ((x,), Sequence([x])):
+        node = Node(args)
+        assert list(iterargs(node)) == [node, x]
+        assert list(iterfreeargs(node)) == [node, x]
+        assert list(preorder_traversal(node)) == [node, x]
+        assert list(postorder_traversal(node)) == [x, node]
+        assert Basic(node).has_free(x)
 
 
 def test_preorder_traversal():
@@ -96,6 +123,182 @@ def test_iterargs():
         Integral(f(x), (f(x), 1)), 1]
     assert list(iterargs(Integral(f(x), (f(x), 1)))) == [
         Integral(f(x), (f(x), 1)), f(x), (f(x), 1), x, f(x), 1, x]
+
+
+def test_iterargs_atomic_arguments():
+    x = Symbol('x')
+    f = Function('f')
+    for value in (f, Symbol, int, 'label', 1):
+        source = Basic(value, x)
+        assert list(iterargs(source)) == [source, value, x]
+        assert list(iterfreeargs(source)) == [source, value, x]
+    source = Lambda(x, Tuple(x, f))
+    assert list(iterfreeargs(source)) == [source, f]
+
+
+def test_traversal_class_literals():
+    class IterableMeta(type):
+        def __iter__(cls):
+            raise AssertionError('class literal was iterated')
+
+    value = IterableMeta('Value', (), {})
+    for wrap in (Basic, lambda value: Tuple(value, sympify=False)):
+        source = wrap(value)
+        for traversal in (preorder_traversal, postorder_traversal):
+            for keys in (None, True, default_sort_key):
+                assert list(traversal(value, keys=keys)) == [value]
+                expected = [source, value] if traversal is preorder_traversal else [value, source]
+                assert list(traversal(source, keys=keys)) == expected
+        for traversal in (iterargs, iterfreeargs):
+            assert list(traversal(value)) == [value]
+            assert list(traversal(source)) == [source, value]
+        assert Basic.is_same(source, wrap(value))
+    assert Basic.is_same(value, value)
+
+
+def test_iterargs_class_child_sequence():
+    class IterableMeta(type):
+        def __iter__(cls):
+            raise AssertionError('class literal was iterated')
+
+    class Native:
+        args = IterableMeta('Children', (), {})
+
+    value = Native()
+    source = Basic(value)
+    for traversal in (iterargs, iterfreeargs):
+        assert list(traversal(source)) == [source, value]
+    assert source.replace(lambda node: node is value, lambda node: S.One) == Basic(S.One)
+
+
+def test_traversal_native_iteration_error():
+    class Value:
+        def __iter__(self):
+            raise ValueError('iteration failed')
+
+    for traversal in (preorder_traversal, postorder_traversal):
+        for value in (Value(), Basic(Value())):
+            assert raises(ValueError,
+                lambda: list(traversal(value))).value.args == ('iteration failed',)
+
+
+def test_iterargs_native_arguments():
+    class Node:
+        def __init__(self, *args):
+            self.args = args
+
+    x, y = symbols('x y')
+    inner = Node(x)
+    outer = Node(inner, y)
+    source = Basic(outer)
+    for traversal in (iterargs, iterfreeargs):
+        assert list(traversal(source)) == [source, outer, inner, y, x]
+    assert source.has(x)
+
+
+def test_iterargs_native_leaf_arguments():
+    class Node:
+        def __init__(self, args):
+            self.args = args
+
+    x, y = symbols('x y')
+    for args in (None, 1, Symbol):
+        node = Node(args)
+        source = Basic(node, y)
+        for traversal in (iterargs, iterfreeargs):
+            assert list(traversal(source)) == [source, node, y]
+        assert not source.has(x)
+
+
+def test_iterargs_native_iterable_arguments():
+    class Node:
+        def __init__(self, args):
+            self.args = args
+
+    x, y = symbols('x y')
+    for traversal in (iterargs, iterfreeargs):
+        for factory in (list, iter):
+            inner = Node((x,))
+            outer = Node(factory((inner, y)))
+            source = Basic(outer)
+            assert list(traversal(source)) == [source, outer, inner, y, x]
+        for args, children in [('xy', ['x', 'y']), ({x: None, y: None}, [x, y])]:
+            outer = Node(args)
+            source = Basic(outer)
+            assert list(traversal(source)) == [source, outer] + children
+
+
+def test_iterargs_native_iteration_opt_out():
+    class Children:
+        _iterable = False
+
+        def __iter__(self):
+            raise AssertionError('iteration is disabled')
+
+    class OpaqueChildren(NotIterable):
+        def __iter__(self):
+            yield S.One
+            raise AssertionError('iteration is disabled')
+
+    for children in (Children(), OpaqueChildren()):
+        class Node:
+            args = children
+
+        node = Node()
+        source = Basic(node)
+        for traversal in (iterargs, iterfreeargs):
+            assert list(traversal(source)) == [source, node]
+
+
+def test_iterargs_native_iteration_error():
+    class Children:
+        def __iter__(self):
+            raise ValueError('native iteration failed')
+
+    class Node:
+        args = Children()
+
+    for traversal in (iterargs, iterfreeargs):
+        with raises(ValueError):
+            list(traversal(Basic(Node())))
+
+
+def test_iterfreeargs_native_binding():
+    class Node:
+        def __init__(self, *args):
+            self.args = args
+
+        def has(self, *patterns):
+            return any(arg.has(*patterns) for arg in self.args)
+
+    x, y = symbols('x y')
+    canonical = Symbol('_0')
+
+    class Binder(Node):
+        bound_symbols = (x,)
+        canonical_variables = {x: canonical}
+
+        def as_dummy(self):
+            return Node(canonical, y)
+
+    binder = Binder(x, y)
+    source = Basic(binder)
+    assert list(iterfreeargs(source)) == [source, binder, y]
+
+
+def test_iterfreeargs_nested_bindings():
+    x, y, z = symbols('x y z')
+    source = Lambda(x, Lambda(y, x + y + z))
+    assert list(iterfreeargs(source)) == [source, z]
+
+
+def test_iterfreeargs_unbound_integral():
+    x, z = symbols('x z')
+    source = Integral(z, z)
+    assert list(iterfreeargs(source)) == [source, z, Tuple(z), z]
+    wrapped = Lambda(x, source)
+    assert list(iterfreeargs(wrapped)) == [wrapped, source, z, Tuple(z), z]
+
 
 def test_deprecated_imports():
     x = symbols('x')

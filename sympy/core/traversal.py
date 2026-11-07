@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterator
 
-from .basic import Basic
+from .basic import Basic, _is_class, _iterable_args
 from .sorting import ordered
 from .sympify import sympify
 from sympy.utilities.iterables import iterable
@@ -31,7 +31,10 @@ def iterargs(expr):
     args = [expr]
     for i in args:
         yield i
-        args.extend(i.args)
+        if issubclass(type(i), Basic):
+            args.extend(i.args)
+        elif not _is_class(i):
+            args.extend(_iterable_args(getattr(i, 'args', ())))
 
 
 def iterfreeargs(expr, _first=True):
@@ -57,12 +60,26 @@ def iterfreeargs(expr, _first=True):
     args = [expr]
     for i in args:
         yield i
-        if _first and hasattr(i, 'bound_symbols'):
-            void = i.canonical_variables.values()
-            for i in iterfreeargs(i.as_dummy(), _first=False):
-                if not i.has(*void):
-                    yield i
-        args.extend(i.args)
+        is_basic = issubclass(type(i), Basic)
+        if not is_basic and _is_class(i):
+            continue
+        # The canonical root is filtered by its caller; nested scopes are separate.
+        if (_first or i is not expr) and getattr(i, 'bound_symbols', ()):
+            canonical = i.as_dummy()
+            bound = getattr(canonical, 'bound_symbols', None)
+            void = bound if bound is not None else i.canonical_variables.values()
+            for arg in iterfreeargs(canonical, _first=False):
+                is_class = _is_class(arg)
+                if is_class and arg in filter(_is_class, void):
+                    continue
+                has = None if is_class else getattr(arg, 'has', None)
+                if has is None or not has(*void):
+                    yield arg
+            continue
+        if is_basic:
+            args.extend(i.args)
+        else:
+            args.extend(_iterable_args(getattr(i, 'args', ())))
 
 
 class preorder_traversal:
@@ -133,7 +150,7 @@ class preorder_traversal:
                     args = ordered(args)
             for arg in args:
                 yield from self._preorder_traversal(arg, keys)
-        elif iterable(node):
+        elif not _is_class(node) and iterable(node):
             for item in node:
                 yield from self._preorder_traversal(item, keys)
 
@@ -298,7 +315,7 @@ def postorder_traversal(node, keys=None):
                 args = ordered(args)
         for arg in args:
             yield from postorder_traversal(arg, keys)
-    elif iterable(node):
+    elif not _is_class(node) and iterable(node):
         for item in node:
             yield from postorder_traversal(item, keys)
     yield node

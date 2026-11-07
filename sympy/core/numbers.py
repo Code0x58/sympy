@@ -11,7 +11,7 @@ from .containers import Tuple
 from .sympify import (SympifyError, _sympy_converter, sympify, _convert_numpy_types,
               _sympify, _is_numpy_instance)
 from .singleton import S, Singleton
-from .basic import Basic
+from .basic import Basic, _is_class
 from .expr import Expr, AtomicExpr
 from .evalf import pure_complex
 from .cache import cacheit, clear_cache
@@ -466,7 +466,7 @@ class Number(AtomicExpr):
         return Order(S.One, *symbols)
 
     def _eval_subs(self, old, new):
-        if old == -self:
+        if not _is_class(old) and old == -self:
             return -new
         return self  # there is no other possibility
 
@@ -946,6 +946,14 @@ class Float(Number):
     def _hashable_content(self):
         return (self._mpf_, self._prec)
 
+    def compare(self, other):
+        if self is other:
+            return 0
+        if type(self) is Float and type(other) is Float:
+            left, right = self._hashable_content(), other._hashable_content()
+            return (left > right) - (left < right)
+        return super().compare(other)
+
     def floor(self):
         return Integer(int(_to_int(_mpf_floor(self._mpf_, self._prec))))
 
@@ -1106,8 +1114,12 @@ class Float(Number):
         return int(_to_int(self._mpf_))  # uses round_fast = round_down
 
     def __eq__(self, other):
+        if self is other:
+            return True
         if isinstance(other, float):
             other = Float(other)
+        if type(self) is Float and type(other) is Float:
+            return self._mpf_ == other._mpf_ and self._prec == other._prec
         return Basic.__eq__(self, other)
 
     def __ne__(self, other):
@@ -3059,7 +3071,7 @@ class Infinity(Number, metaclass=Singleton):
         return r"\infty"
 
     def _eval_subs(self, old, new):
-        if self == old:
+        if not _is_class(old) and self == old:
             return new
 
     def _eval_evalf(self, prec=None):
@@ -3215,7 +3227,7 @@ class NegativeInfinity(Number, metaclass=Singleton):
         return r"-\infty"
 
     def _eval_subs(self, old, new):
-        if self == old:
+        if not _is_class(old) and self == old:
             return new
 
     def _eval_evalf(self, prec=None):

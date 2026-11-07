@@ -43,7 +43,63 @@ clear_cache = CACHE.clear_cache
 
 from functools import lru_cache, wraps
 
-def __cacheit(maxsize):
+
+class _IdentityKey:
+    """Keep a value alive while using its identity as a key."""
+    __slots__ = ('value',)
+
+    def __init__(self, value):
+        self.value = value
+
+    def __hash__(self):
+        return id(self.value)
+
+    def __eq__(self, other):
+        return type(self) is type(other) and self.value is other.value
+
+    def __reduce__(self):
+        return type(self), (self.value,)
+
+
+class _ReceiverIdentityKey(_IdentityKey):
+    """Preserve hashability and concrete-type checks for cached receivers."""
+    __slots__ = ('owner_type',)
+
+    def __init__(self, value, *args):
+        self.value = value
+        self.owner_type = type(value)
+
+    def __hash__(self):
+        # Unhashable receivers bypass caching.
+        hash(self.value)
+        return id(self.value)
+
+    def __eq__(self, other):
+        return (type(self) is type(other) and self.value is other.value
+                and self.owner_type is other.owner_type)
+
+
+def _is_unhashable_error(error, cached_code=None, lookup_code=None):
+    """Recognize standard key errors, optionally excluding a cached call."""
+    if not (type(error) is TypeError and len(error.args) == 1
+            and type(error.args[0]) is str
+            and error.args[0].startswith('unhashable type:')):
+        return False
+    if cached_code is None:
+        return True
+    trace = error.__traceback__
+    if trace is None:
+        return False
+    origin = trace.tb_next
+    # A Python implementation of lru_cache contributes its own frame.
+    if (origin is not None and lookup_code is not None
+            and lookup_code is not cached_code
+            and origin.tb_frame.f_code is lookup_code):
+        origin = origin.tb_next
+    return origin is None or origin.tb_frame.f_code is not cached_code
+
+
+def __cacheit(maxsize, *, by_identity=False, call_boundary=False):
     """caching decorator.
 
         important: the result of cached function must be *immutable*
@@ -64,18 +120,45 @@ def __cacheit(maxsize):
         to force cacheit to check returned results mutability and consistency,
         set environment variable SYMPY_USE_CACHE to 'debug'
     """
-    def func_wrapper(func):
-        cfunc = lru_cache(maxsize, typed=True)(func)
+    def func_wrapper(func, *, _identity_key=_ReceiverIdentityKey):
+        if by_identity:
+            # This frame distinguishes lookup failures from errors in the call.
+            def cached(self_key, /, *args, **kwargs):
+                return func(self_key.value, *args, **kwargs)
+        else:
+            cached = func
+        cfunc = lru_cache(maxsize, typed=True)(cached)
+        # Only private receiver adapters supply a call boundary.
+        if by_identity or call_boundary:
+            cached_code = cached.__code__
+            lookup_code = getattr(cfunc.__call__, '__code__', None)
+            if lookup_code is None:
+                lookup_code = getattr(cfunc, '__code__', None)
+        else:
+            cached_code = lookup_code = None
 
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                retval = cfunc(*args, **kwargs)
-            except TypeError as e:
-                if not e.args or not e.args[0].startswith('unhashable type:'):
-                    raise
-                retval = func(*args, **kwargs)
-            return retval
+        if by_identity:
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                if not args:
+                    return func(**kwargs)
+                self_key = _identity_key(*args)
+                try:
+                    return cfunc(self_key, *args[1:], **kwargs)
+                except TypeError as e:
+                    if not _is_unhashable_error(e, cached_code, lookup_code):
+                        raise
+                    return func(*args, **kwargs)
+        else:
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                try:
+                    retval = cfunc(*args, **kwargs)
+                except TypeError as e:
+                    if not _is_unhashable_error(e, cached_code, lookup_code):
+                        raise
+                    retval = func(*args, **kwargs)
+                return retval
 
         wrapper.cache_info = cfunc.cache_info
         wrapper.cache_clear = cfunc.cache_clear
@@ -83,6 +166,8 @@ def __cacheit(maxsize):
         CACHE.append(wrapper)
         return wrapper
 
+    if not by_identity:
+        func_wrapper._by_identity = __cacheit(maxsize, by_identity=True)
     return func_wrapper
 ########################################
 
@@ -93,8 +178,8 @@ def __cacheit_nocache(func):
 
 def __cacheit_debug(maxsize):
     """cacheit + code to check cache consistency"""
-    def func_wrapper(func):
-        cfunc = __cacheit(maxsize)(func)
+    def func_wrapper(func, *, _call_boundary=False):
+        cfunc = __cacheit(maxsize, call_boundary=_call_boundary)(func)
 
         @wraps(func)
         def wrapper(*args, **kw_args):
@@ -151,6 +236,35 @@ elif USE_CACHE == 'debug':
 else:
     raise RuntimeError(
         'unrecognized value for SYMPY_USE_CACHE: %s' % USE_CACHE)
+
+
+def cacheit_by_identity(func, *, key=_ReceiverIdentityKey):
+    """Cache a method using cacheit's policies and a receiver identity key.
+
+    The key receives all positional arguments and exposes the receiver as ``value``.
+    """
+    identity_cache = getattr(cacheit, '_by_identity', None)
+    if identity_cache is not None:
+        return identity_cache(func, _identity_key=key)
+    @wraps(func, updated=())
+    def cached(self_key, /, *args, **kwargs):
+        return func(self_key.value, *args, **kwargs)
+
+    # Custom function attributes belong on the public wrapper.
+    attributes = {}
+    attributes.update(getattr(func, '__dict__', {}))
+    cached = (cacheit(cached, _call_boundary=True) if USE_CACHE == 'debug'
+              else cacheit(cached))
+
+    @wraps(cached)
+    def wrapper(*args, **kwargs):
+        if args:
+            return cached(key(*args), *args[1:], **kwargs)
+        return func(**kwargs)
+
+    wrapper.__dict__.update(attributes)
+    wrapper.__wrapped__ = func
+    return wrapper
 
 
 def cached_property(func):

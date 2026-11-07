@@ -2,15 +2,20 @@
 of Basic or Atom."""
 from __future__ import annotations
 import collections
+from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 from typing import TypeVar, Generic
+from unittest.mock import Mock
 
 from sympy.assumptions.ask import Q
 from sympy.core.basic import (Basic, Atom, as_Basic,
     _atomic, _aresame)
+from sympy.core.cache import clear_cache
 from sympy.core.containers import Tuple
-from sympy.core.function import Function, Lambda
-from sympy.core.numbers import I, pi, Float
+from sympy.core.function import Function, Lambda, Subs
+from sympy.core.numbers import I, pi, Float, equal_valued
 from sympy.core.singleton import S
+from sympy.core.sorting import default_sort_key
 from sympy.core.symbol import symbols, Symbol, Dummy
 from sympy.concrete.summations import Sum
 from sympy.functions.elementary.trigonometric import (cos, sin)
@@ -30,6 +35,127 @@ b21 = Basic(b2, b1)
 T = TypeVar('T')
 
 
+class _ReportedClassNode(Basic):
+    reported_class = type
+
+    @property
+    def __class__(self):
+        return self.reported_class
+
+    @property
+    def func(self):
+        return type(self)
+
+    def _eval_rewrite_as_reported(self, *args, **hints):
+        return self.func(S.One)
+
+
+def test_reported_class_expression_operations():
+    x, y = symbols('reported_x reported_y')
+    for wrap in (lambda value: value, Basic, lambda value: Basic(Basic(value))):
+        source = wrap(_ReportedClassNode(x))
+        expected = wrap(_ReportedClassNode(y))
+        assert source.free_symbols == {x}
+        assert _aresame(source.subs(x, y), expected)
+        assert _aresame(source.xreplace({x: y}), expected)
+        assert _aresame(source.replace(x, y), expected)
+        assert _aresame(source.rewrite('reported'), wrap(_ReportedClassNode(S.One)))
+        bound = wrap(_ReportedClassNode(Integral(x, (x, 0, 1))))
+        canonical = Symbol('_0')
+        assert bound.as_dummy() == wrap(
+            _ReportedClassNode(Integral(canonical, (canonical, 0, 1))))
+
+
+def test_reported_class_type_replacement():
+    x, y = symbols('reported_x reported_y')
+    for wrap in (lambda value: value, Basic, lambda value: Basic(Basic(value))):
+        calls = []
+
+        def replace(*children):
+            calls.append(children)
+            return _ReportedClassNode(y)
+
+        result = wrap(_ReportedClassNode(x)).replace(_ReportedClassNode, replace)
+        assert _aresame(result, wrap(_ReportedClassNode(y)))
+        assert calls == [(x,)]
+
+
+def test_has_free_reported_class_patterns():
+    x = Symbol('reported_pattern_x')
+    patterns = (_ReportedClassNode(x), Mock(spec=type))
+    for pattern in patterns:
+        assert isinstance(pattern, type)
+        for wrap in (Basic, lambda value: Basic(Basic(value))):
+            source = wrap(pattern)
+            assert source.has_free(pattern)
+            assert source.has_free(pattern)
+            assert source.has_free(Symbol, pattern)
+            assert source.has_xfree({pattern})
+
+    class ClassProxy:
+        __bases__ = (Basic,)
+
+        @property
+        def __class__(self):
+            return type
+
+        def __instancecheck__(self, value):
+            return isinstance(value, Basic)
+
+    proxy = ClassProxy()
+    assert Basic().has(proxy)
+    assert Basic().has_free(proxy)
+
+
+def test_reported_class_native_fields():
+    class Scalar:
+        __sympy__ = True
+
+        def __init__(self, value, reported=False):
+            self.value = value
+            self.reported = reported
+
+        @property
+        def __class__(self):
+            return type if self.reported else type(self)
+
+        def __hash__(self):
+            return hash(self.value)
+
+        def __eq__(self, other):
+            return type(self) is type(other) and self.value == other.value
+
+        def __lt__(self, other):
+            return self.value < other.value
+
+        def __gt__(self, other):
+            return self.value > other.value
+
+        def __str__(self):
+            return str(self.value)
+
+    first, alias, other = [Basic(Scalar(value, reported))
+                          for value, reported in ((0, True), (0, False), (1, False))]
+    assert first == alias and hash(first) == hash(alias)
+    assert first.compare(alias) == alias.compare(first) == 0
+    assert first.compare(other) == alias.compare(other) == -1
+    assert first.sort_key() == alias.sort_key()
+    assert default_sort_key(Scalar(0, True))[1] == (1, ('0',))
+
+
+def test_reported_class_native_containers():
+    for container in (tuple, frozenset):
+        class Reported(container):
+            @property
+            def __class__(self):
+                return type
+
+        first, alias = Basic(Reported([1, 2])), Basic(container([1, 2]))
+        assert first == alias and hash(first) == hash(alias)
+        assert first.compare(alias) == alias.compare(first) == 0
+        assert first.sort_key() == alias.sort_key()
+
+
 def test__aresame():
     assert not _aresame(Basic(Tuple()), Basic())
     for i, j in [(S(2), S(2.)), (1., Float(1))]:
@@ -37,6 +163,283 @@ def test__aresame():
             assert not _aresame(Basic(i), Basic(j))
             assert not _aresame(i, j)
             i, j = j, i
+
+
+def test_is_same_native_none():
+    x = Symbol('x')
+    for value in (None, Basic(None), Basic(None, x), Basic((None, x)), (None, x)):
+        assert Basic.is_same(value, value)
+    assert Basic.is_same(Basic(None, x), Basic(None, x))
+    assert not Basic.is_same(Basic(None), Basic())
+    assert not Basic.is_same(Basic(), Basic(None))
+    assert not Basic.is_same(Basic(None, x), Basic(x, None))
+
+
+def test_is_same_missing_values():
+    class Value:
+        def __eq__(self, other):
+            if other is None:
+                raise ValueError('unexpected comparison with None')
+            return isinstance(other, Value)
+
+    first, second = Value(), Value()
+    assert Basic.is_same(first, second)
+    assert Basic.is_same(Basic(first), Basic(second))
+    assert not Basic.is_same(Basic(first), Basic())
+    assert not Basic.is_same(Basic(), Basic(second))
+
+
+def test_replace_equal_native_none():
+    x = Symbol('x')
+    for wrap in (lambda value: value, Basic, Tuple):
+        for simultaneous in (False, True):
+            original, replacement = Basic(None, x), Basic(None, x)
+            source = wrap(original)
+            result, changes = source.replace(lambda node: node is original,
+                lambda node: replacement, map=True, simultaneous=simultaneous)
+            assert result is source
+            assert changes == {}
+
+
+def test_is_same_unordered_fields():
+    class Label:
+        def __init__(self, value):
+            self.value = value
+
+        def __hash__(self):
+            return 0
+
+        def __eq__(self, other):
+            return isinstance(other, Label) and self.value == other.value
+
+    for size in (2, 3, 5):
+        first = frozenset(Label(value) for value in range(size))
+        second = frozenset(Label(value) for value in reversed(range(size)))
+        for wrap in (lambda value: value, Basic,
+                     lambda value: Basic((value,)),
+                     lambda value: Basic(frozenset([value]))):
+            left, right = wrap(first), wrap(second)
+            assert Basic.is_same(left, right)
+            assert Basic.is_same(right, left)
+            if isinstance(left, Basic):
+                for simultaneous in (False, True):
+                    result, changes = left.replace(lambda node: node is left,
+                        lambda node: right, map=True, simultaneous=simultaneous)
+                    assert result is left
+                    assert changes == {}
+
+
+def test_is_same_unordered_member_structure():
+    x, y, z = symbols('x y z')
+    f = Function('f')
+    first, second = Subs(f(x), x, 0), Subs(f(y), y, 0)
+    for wrap in (Basic, lambda value: Basic((value,))):
+        left = wrap(frozenset([first, z]))
+        right = wrap(frozenset([z, second]))
+        assert left == right
+        assert not Basic.is_same(left, right)
+        result, changes = left.replace(lambda node: node is left,
+            lambda node: right, map=True)
+        assert result is right
+        assert changes[left] is right
+
+
+def test_is_same_unordered_member_types():
+    for first, second in ((1, 1.0), (1, True), (1, S.One), (S.One, Float(1))):
+        for wrap in (lambda value: value, Basic):
+            left, right = [wrap(frozenset([value])) for value in (first, second)]
+            assert not Basic.is_same(left, right)
+            assert not Basic.is_same(right, left)
+
+
+def test_is_same_container_storage():
+    for base in (tuple, frozenset):
+        class Stored(base):
+            def __iter__(self):
+                raise AssertionError('stored members must be used')
+
+            def __len__(self):
+                raise AssertionError('stored cardinality must be used')
+
+        for wrap in (lambda value: value, Basic):
+            left, right = wrap(Stored([1, 2])), wrap(Stored([1, 2]))
+            assert Basic.is_same(left, right)
+
+
+def test_is_same_shared_native_nan():
+    for value in (float('nan'), complex(float('nan'), 0), Decimal('NaN'), Decimal('sNaN')):
+        assert Basic.is_same(value, value)
+        assert Basic.is_same(Basic(value), Basic(value))
+    assert not Basic.is_same(float('nan'), float('nan'))
+    with raises(InvalidOperation):
+        Basic.is_same(Decimal('sNaN'), Decimal('sNaN'))
+
+
+def test_is_same_numeric_approximation():
+    first, second = Basic(S.Half), Basic(Float(0.5))
+    assert Basic.is_same(first, second, equal_valued)
+    assert not Basic.is_same(S.One, S.One, lambda left, right: False)
+
+
+def test_is_same_aliased_tree_shapes():
+    class First(Basic):
+        def __eq__(self, other):
+            return isinstance(other, First)
+
+    class Second(Basic):
+        def __eq__(self, other):
+            return isinstance(other, Second)
+
+    left, right = First(Second(), First()), First(Second(First()))
+    assert left == right
+    assert not Basic.is_same(left, right)
+    assert not Basic.is_same(right, left)
+    left, right = First(First(), First()), First(First(First()))
+    assert left == right
+    assert not Basic.is_same(left, right)
+    assert not Basic.is_same(right, left)
+    for base in (tuple, list):
+        class Sequence(base):
+            def __eq__(self, other):
+                return type(self) is type(other)
+
+        left = Sequence((Second(), Sequence(())))
+        right = Sequence((Second(Sequence(())),))
+        assert left == right
+        assert not Basic.is_same(left, right)
+        assert not Basic.is_same(right, left)
+
+
+def test_is_same_deep_unequal_trees():
+    left, right = symbols('deep_left deep_right')
+    for _ in range(500):
+        left, right = Basic(left), Basic(right)
+    for wrap in (lambda value: value, lambda value: (value,),
+                 lambda value: Basic(None, value)):
+        assert not Basic.is_same(wrap(left), wrap(right))
+        assert not Basic.is_same(wrap(right), wrap(left))
+
+
+def test_is_same_metadata_after_children():
+    class Metadata(Basic):
+        def __eq__(self, other):
+            raise ValueError('metadata comparison failed')
+
+    x, y = symbols('x y')
+    assert not Basic.is_same(Metadata(x), Metadata(y))
+    assert raises(ValueError,
+        lambda: Basic.is_same(Metadata(x), Metadata(x))).value.args == ('metadata comparison failed',)
+
+    class EndingValue:
+        def __eq__(self, other):
+            raise StopIteration('equality failed')
+
+    assert raises(StopIteration,
+        lambda: Basic.is_same(EndingValue(), EndingValue())).value.args == ('equality failed',)
+
+
+def test_is_same_deep_frozensets():
+    for left, right, expected in ((-1, -2, False), (S.One, S.One, True)):
+        for _ in range(500):
+            left, right = frozenset([left]), frozenset([right])
+        assert Basic.is_same(left, right) is expected
+
+
+def test_is_same_shared_subtrees():
+    class Leaf(Basic):
+        calls = 0
+
+        def __eq__(self, other):
+            type(self).calls += 1
+            return isinstance(other, Leaf) and self.args == other.args
+
+    left, right = Leaf(S.One), Leaf(S.One)
+    for _ in range(10):
+        left, right = Basic(left, left), Basic(right, right)
+    assert Basic.is_same(left, right)
+    assert Leaf.calls < 20
+
+
+def test_is_same_comparison_cache_lifetime():
+    left, right = [1], [1]
+    assert Basic.is_same(left, right)
+    right[0] = 2
+    assert not Basic.is_same(left, right)
+    right[0] = 1
+    assert Basic.is_same(left, right)
+
+
+def test_is_same_argument_snapshot():
+    class Node(Basic):
+        reads = 0
+
+        @property
+        def args(self):
+            self.reads += 1
+            return super().args
+
+    x, y = symbols('x y')
+    left, right = Node(x), Node(y)
+    assert not Basic.is_same(left, right)
+    assert left.reads == right.reads == 1
+
+
+def test_is_same_cycles():
+    left, right = [], []
+    left.append(left)
+    right.append(right)
+    assert Basic.is_same(left, left)
+    with raises(RecursionError):
+        Basic.is_same(left, right)
+
+
+def test_is_same_lazy_iterables():
+    class Stream:
+        def __init__(self, first):
+            self.first = first
+
+        def __iter__(self):
+            yield self.first
+            raise ValueError('unvisited tail')
+
+    for wrap in (lambda value: value, Basic):
+        left, right = wrap(Stream(S.Zero)), wrap(Stream(S.One))
+        assert not Basic.is_same(left, right)
+        assert not Basic.is_same(right, left)
+        assert raises(ValueError,
+            lambda: Basic.is_same(wrap(Stream(S.One)), wrap(Stream(S.One)))).value.args == ('unvisited tail',)
+
+
+def test_is_same_iterable_lengths():
+    class Sequence(list):
+        pass
+
+    for first, second in (([], [S.One]), ([S.One], [S.One, S(2)]),
+                          ([None], [None, None])):
+        left, right = Sequence(first), Sequence(second)
+        for wrap in (lambda value: value, Basic):
+            assert not Basic.is_same(wrap(left), wrap(right))
+            assert not Basic.is_same(wrap(right), wrap(left))
+
+
+def test_is_same_list_equality_after_children():
+    class Item:
+        def __init__(self, owner, replacement):
+            self.owner = owner
+            self.replacement = replacement
+
+        def __eq__(self, other):
+            if not isinstance(other, Item):
+                return False
+            self.owner[:] = self.replacement
+            return True
+
+    for replacement in ([], [1, 2]):
+        for wrap in (lambda value: value, Basic, lambda value: (value,)):
+            left, right = [], []
+            left.append(Item(left, replacement))
+            right.append(Item(right, replacement))
+            assert not Basic.is_same(wrap(left), wrap(right))
 
 
 def test_structure():
@@ -49,6 +452,638 @@ def test_immutable():
     assert not hasattr(b1, '__dict__')
     with raises(AttributeError):
         b1.x = 1
+
+
+def test_compare_function_classes():
+    f, g = Function('f'), Function('g')
+    assert Tuple(f).compare(Tuple(g)) == -1
+    assert Tuple(g).compare(Tuple(f)) == 1
+    assert Tuple(sin).compare(Tuple(cos)) == 1
+    assert Tuple(cos).compare(Tuple(sin)) == -1
+    assert Tuple(f).compare(Tuple(f)) == 0
+    x = Symbol('x')
+    assert Tuple(f).compare(Tuple(x)) == -Tuple(x).compare(Tuple(f)) != 0
+    named_like_metaclass = Function('UndefinedFunction')(x)
+    assert named_like_metaclass.compare(f) == -1
+    assert Tuple(f).compare(Tuple(named_like_metaclass)) == 1
+    assert Tuple(named_like_metaclass).compare(Tuple(f)) == -1
+
+    for first, second in [
+        (Function('a', nargs=1), Function('a', nargs=2)),
+        (Function('a', positive=True), Function('a', negative=True)),
+    ]:
+        assert first != second
+        assert Tuple(first).compare(Tuple(second)) == -Tuple(second).compare(Tuple(first)) != 0
+    first = Function('a', positive=True)(x)
+    second = Function('a', negative=True)(x)
+    assert first.compare(second) == -second.compare(first) != 0
+    assert first + second == second + first
+
+
+def test_compare_class_and_native_arguments():
+    for cls in (Function('f'), Symbol, int):
+        first = Basic(cls)
+        for value in (None, 1, 1.0, False, 'f', (1,), frozenset([1])):
+            second = Basic(value)
+            assert first.compare(second) == -second.compare(first) != 0
+
+
+def test_compare_class_and_native_transitivity():
+    first = Basic(frozenset([S.One]))
+    second = Basic('f')
+    third = Basic(int)
+    assert first.compare(second) < 0
+    assert second.compare(third) < 0
+    assert first.compare(third) < 0
+
+
+def test_compare_frozenset_arguments():
+    for convert in (int, S):
+        values = [frozenset(map(convert, items))
+                  for items in ((1, 9), (9, 1), (8, 1))]
+        for nested in (False, True):
+            first, second, other = [Basic(frozenset([value]) if nested else value)
+                                    for value in values]
+            assert first == second
+            assert first.compare(second) == second.compare(first) == 0
+            assert first.compare(other) == second.compare(other) != 0
+            assert first.compare(other) == -other.compare(first)
+
+
+def test_custom_frozenset_ordering_alias():
+    class Label:
+        def __init__(self, label):
+            self.label = label
+
+        def __eq__(self, other):
+            return isinstance(other, Label) and self.label == other.label
+
+        def __hash__(self):
+            return hash(self.label)
+
+        def __lt__(self, other):
+            return self.label < other.label if isinstance(other, Label) else NotImplemented
+
+        def __gt__(self, other):
+            return self.label > other.label if isinstance(other, Label) else NotImplemented
+
+    class LabelSet(Label, frozenset):
+        def __new__(cls, label):
+            return frozenset.__new__(cls, [0])
+
+    for wrap in (lambda value: value, lambda value: (value,),
+                 lambda value: frozenset([value])):
+        first, alias, other = [Basic(wrap(value))
+            for value in (LabelSet(0), Label(0), LabelSet(1))]
+        assert first == alias
+        assert hash(first) == hash(alias)
+        assert first.compare(alias) == alias.compare(first) == 0
+        assert first.compare(other) == alias.compare(other) == -1
+        assert other.compare(first) == other.compare(alias) == 1
+        keys = []
+        for item in (first, alias, other):
+            clear_cache()
+            keys.append(default_sort_key(item))
+        assert keys[0] == keys[1]
+        assert hash(keys[0]) == hash(keys[1])
+        assert keys[0] < keys[2] and keys[1] < keys[2]
+        assert keys[2] > keys[0] and keys[2] > keys[1]
+
+    class FailingLabel(Label):
+        def __lt__(self, other):
+            raise RuntimeError('label ordering failed')
+
+    assert raises(RuntimeError,
+        lambda: Basic(FailingLabel(0)).compare(Basic(LabelSet(1)))).value.args == ('label ordering failed',)
+
+
+def test_frozenset_argument_kinds():
+    for native, symbolic in [(1, S.One), (1.0, Float(1)), (True, S.true)]:
+        for nested in (False, True):
+            left, right = frozenset([native]), frozenset([symbolic])
+            if nested:
+                left, right = frozenset([left]), frozenset([right])
+            first, second = Basic(left), Basic(right)
+            assert first != second
+            assert first.compare(second) == -second.compare(first) != 0
+
+
+def test_frozenset_identity_after_equal_query():
+    native, symbolic = frozenset([1]), frozenset([S.One])
+    assert native == symbolic and hash(native) == hash(symbolic)
+    for left, right in ((native, symbolic), (symbolic, native)):
+        clear_cache()
+        first, second = Basic(left), Basic(right)
+        assert first == Basic(frozenset(list(left)))
+        assert second == Basic(frozenset(list(right)))
+        assert first != second
+        assert first.compare(second) == -second.compare(first) != 0
+        assert default_sort_key(first) != default_sort_key(second)
+
+
+def test_frozenset_comparison_without_container_hash():
+    class StoredSet(frozenset):
+        def __hash__(self):
+            raise RuntimeError('container hashing is unavailable')
+
+    first = Basic(StoredSet([1]))
+    equivalent = Basic(frozenset([1]))
+    other = Basic(frozenset([2]))
+    assert first == equivalent
+    assert first.compare(equivalent) == equivalent.compare(first) == 0
+    assert first.compare(other) == -other.compare(first) == -1
+
+
+def test_singleton_frozenset_equal_members():
+    class Equivalent(Basic):
+        def __eq__(self, other):
+            return isinstance(other, Equivalent)
+
+        def __hash__(self):
+            return 0
+
+    first, second = Equivalent(1), Equivalent(2)
+    assert first == second and first.compare(second) != 0
+    left, right = Basic(frozenset([first])), Basic(frozenset([second]))
+    assert left == right
+    assert left.compare(right) == right.compare(left) == 0
+    assert default_sort_key(left) == default_sort_key(right)
+
+
+def test_frozenset_native_numeric_equivalence():
+    for one in (1, True, 1.0, Fraction(1), Decimal(1)):
+        for nested in (False, True):
+            values = [frozenset(items) for items in ((1, 2), (one, 2), (0, 2), (1, 3))]
+            if nested:
+                values = [frozenset([value]) for value in values]
+            first, equivalent, lower, upper = map(Basic, values)
+            assert first == equivalent
+            assert hash(first) == hash(equivalent)
+            assert first.compare(equivalent) == 0
+            assert first.compare(lower) == equivalent.compare(lower) == 1
+            assert first.compare(upper) == equivalent.compare(upper) == -1
+
+
+def test_tuple_argument_identity():
+    for wrap in (tuple, lambda value: (tuple(value),),
+                 lambda value: frozenset([tuple(value)]),
+                 lambda value: (frozenset(value),)):
+        first = Basic(wrap((1, 2)))
+        for alias in (True, 1.0, Fraction(1), Decimal(1)):
+            equivalent = Basic(wrap((alias, 2)))
+            assert first == equivalent
+            assert hash(first) == hash(equivalent)
+            assert first.compare(equivalent) == equivalent.compare(first) == 0
+        for symbolic in (S.One, Float(1), S.true):
+            other = Basic(wrap((symbolic, 2)))
+            assert first != other
+            assert first.compare(other) == -other.compare(first) != 0
+
+
+def test_tuple_argument_storage():
+    class StoredTuple(tuple):
+        __slots__ = ()
+
+        def __iter__(self):
+            return iter([2])
+
+        def __len__(self):
+            raise TypeError('stored contents do not use overridden iteration or length')
+
+    first = Basic(StoredTuple((S.One, 9)))
+    equivalent = Basic((S.One, 9))
+    other = Basic((1, 9))
+    assert first == equivalent
+    assert hash(first) == hash(equivalent)
+    assert first != other
+    assert first.compare(equivalent) == 0
+    assert first.compare(other) == equivalent.compare(other) != 0
+
+
+def test_tuple_argument_ordering():
+    for left, right in [((1, 2), (2,)), ((1,), (1, 0)), ((1, 2), (1, 3))]:
+        first, second = Basic(left), Basic(right)
+        assert first.compare(second) == -1
+        assert second.compare(first) == 1
+        assert default_sort_key(first) < default_sort_key(second)
+
+
+def test_tuple_argument_custom_ordering():
+    class ReverseTuple(tuple):
+        __slots__ = ()
+        __lt__ = tuple.__gt__
+        __gt__ = tuple.__lt__
+
+    class StoredTuple(ReverseTuple):
+        __slots__ = ()
+
+        def __iter__(self):
+            raise AssertionError('stored tuple contents must be used')
+
+        __len__ = __iter__
+
+    for cls in (ReverseTuple, StoredTuple):
+        for wrap in (lambda value: value, lambda value: (value,)):
+            first, second = [Basic(wrap(cls((value,)))) for value in (1, 2)]
+            assert first.compare(second) == 1
+            assert second.compare(first) == -1
+            equivalent = Basic(wrap(cls((1.0,))))
+            assert first == equivalent
+            assert first.compare(equivalent) == 0
+            symbolic = Basic(wrap(cls((S.One,))))
+            assert first != symbolic
+            assert first.compare(symbolic) == -symbolic.compare(first) != 0
+
+
+def test_tuple_argument_ordering_groups():
+    class PlainTuple(tuple):
+        __slots__ = ()
+
+    class ReverseTuple(tuple):
+        __slots__ = ()
+        __lt__ = tuple.__gt__
+        __gt__ = tuple.__lt__
+
+    class InheritedTuple(ReverseTuple):
+        __slots__ = ()
+
+    fields = [(1,), PlainTuple((1,)), ReverseTuple((1,)),
+              ReverseTuple((1.0,)), InheritedTuple((1,)), (2,), ReverseTuple((2,))]
+    values = list(map(Basic, fields))
+    groups = (0, 0, 1, 1, 2, 3, 4)
+    for i, left in enumerate(values):
+        for j, right in enumerate(values):
+            equal = groups[i] == groups[j]
+            assert (left == right) == equal
+            comparison = left.compare(right)
+            assert (comparison == 0) == equal
+            assert comparison == -right.compare(left)
+            if equal:
+                assert hash(left) == hash(right)
+                for other in values:
+                    assert left.compare(other) == right.compare(other)
+
+
+def test_frozenset_argument_storage():
+    class StoredSet(frozenset):
+        def __iter__(self):
+            return iter([2])
+
+        def __len__(self):
+            raise TypeError('stored contents do not use overridden iteration or length')
+
+    first = Basic(StoredSet([1, 9]))
+    equivalent = Basic(frozenset([1, 9]))
+    other = Basic(frozenset([1, 8]))
+    assert first == equivalent
+    assert first.compare(equivalent) == 0
+    assert first.compare(other) == equivalent.compare(other) == 1
+
+
+def test_compare_equal_unordered_frozenset_arguments():
+    first = Basic(frozenset([None, 'a', 1j]))
+    second = Basic(frozenset([1j, 'a', None]))
+    assert first == second
+    assert first.compare(second) == second.compare(first) == 0
+
+
+def test_frozenset_custom_equality():
+    class EquivalentSet(frozenset):
+        def __eq__(self, other):
+            return isinstance(other, EquivalentSet)
+
+        def __hash__(self):
+            return 0
+
+    first, second = Basic(EquivalentSet([1])), Basic(EquivalentSet([2, 3]))
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first.compare(second) == second.compare(first) == 0
+
+
+def test_frozenset_metaclass_equality_attribute():
+    class Meta(type):
+        __dict__ = property(lambda cls: {})
+
+        def __getattribute__(cls, name):
+            if name == '__eq__':
+                return frozenset.__eq__
+            return super().__getattribute__(name)
+
+    class EquivalentSet(frozenset, metaclass=Meta):
+        def __eq__(self, other):
+            return isinstance(other, EquivalentSet)
+
+        def __hash__(self):
+            return 0
+
+    first, second = Basic(EquivalentSet([1])), Basic(EquivalentSet([2]))
+    assert first == second
+    assert first.compare(second) == second.compare(first) == 0
+
+
+def test_compare_frozenset_sort_key_ties():
+    class CollidingSymbol(Symbol):
+        def __hash__(self):
+            return 0
+
+    positive = CollidingSymbol('a', positive=True)
+    negative = CollidingSymbol('a', negative=True)
+    zero = CollidingSymbol('a', zero=True)
+    assert default_sort_key(positive) == default_sort_key(negative)
+    first, second, other = [Basic(frozenset(items)) for items in (
+        (positive, negative), (negative, positive), (positive, zero))]
+    assert first == second
+    assert first.compare(second) == second.compare(first) == 0
+    assert first.compare(other) == second.compare(other) != 0
+    assert first.compare(other) == -other.compare(first)
+
+
+def test_compare_frozenset_and_native_arguments():
+    first = Basic(frozenset([S.One]))
+    for value in (None, 1, 1.0, 1 + 2j, False, 'f', (1,)):
+        second = Basic(value)
+        assert first.compare(second) == -second.compare(first) != 0
+
+
+def test_compare_frozenset_complex_arguments():
+    for convert in (int, float, Fraction, Decimal):
+        one = convert(1)
+        first = Basic(frozenset([one, 2j]))
+        second = Basic(frozenset([2j, one]))
+        lower = Basic(frozenset([0, 3j]))
+        upper = Basic(frozenset([one, 3j]))
+        assert first == second
+        assert first.compare(lower) == second.compare(lower) == 1
+        assert lower.compare(first) == -1
+        assert first.compare(upper) == second.compare(upper) == -1
+        assert upper.compare(first) == 1
+
+
+def test_native_complex_argument_ordering():
+    groups = [
+        (-2, -2 + 0j), (-2 + 1j,),
+        (False, 0, 0.0, 0j, Decimal(0), Fraction(0)), (1j,),
+        (Fraction(1, 2), Decimal('0.5'), 0.5, 0.5 + 0j),
+        (True, 1, 1.0, 1 + 0j, Decimal(1), Fraction(1)),
+        (1 + 2j,), (2, 2 + 0j),
+    ]
+    for i, left in enumerate(groups):
+        for j, right in enumerate(groups):
+            for a in left:
+                for b in right:
+                    assert Basic(a).compare(Basic(b)) == (i > j) - (i < j)
+
+
+def test_native_complex_nan_ordering():
+    for left, right in [
+        (complex('nan'), 1),
+        (complex(0, float('nan')), 0),
+        (complex('nan'), 1j),
+        (complex(0, float('nan')), 1j),
+        (1j, float('nan')),
+        (1j, Decimal('NaN')),
+    ]:
+        with raises(TypeError):
+            Basic(left).compare(Basic(right))
+        with raises(TypeError):
+            Basic(right).compare(Basic(left))
+
+
+def test_compare_shared_native_nan():
+    for constructor in (float, complex, Decimal):
+        value = constructor('nan')
+        first, second = Basic(value), Basic(value)
+        assert first == second
+        assert first.compare(second) == second.compare(first) == 0
+        assert Basic(value, 0).compare(Basic(value, 1)) == -1
+
+
+def test_native_complex_subclass_ordering():
+    class TaggedComplex(complex):
+        def __new__(cls, value, tag):
+            obj = super().__new__(cls, value)
+            obj.tag = tag
+            return obj
+
+        def __eq__(self, other):
+            return type(other) is type(self) and self.tag == other.tag
+
+        def __hash__(self):
+            return hash(self.tag)
+
+        def __lt__(self, other):
+            return self.tag < other.tag
+
+        def __gt__(self, other):
+            return self.tag > other.tag
+
+    first = Basic(TaggedComplex(1 + 2j, 1))
+    second = Basic(TaggedComplex(1 + 2j, 2))
+    assert first != second
+    assert first.compare(second) == -1
+    assert second.compare(first) == 1
+
+
+def test_sort_key_class_and_native_arguments():
+    for cls in (Function('f'), Symbol, int):
+        first = Basic(cls)
+        for value in (None, 1, 1.0, False, 'f', (1,), frozenset([1]), Symbol('x')):
+            second = Basic(value)
+            assert sorted([first, second], key=default_sort_key) == [second, first]
+            assert sorted([second, first], key=default_sort_key) == [second, first]
+    first = Basic(1)
+    first_key = first.sort_key()
+    for value in (1.0, True):
+        clear_cache()
+        second = Basic(value)
+        assert first == second
+        assert first_key == second.sort_key()
+
+
+def test_native_and_sympy_argument_ordering():
+    x = Symbol('x')
+    for symbolic in (S.One, x, Basic(x)):
+        first = Basic(symbolic)
+        for native in (None, 1, 1.0, False, 'x', (1,), frozenset([1])):
+            second = Basic(native)
+            assert first != second and second != first
+            assert first.compare(second) == -1
+            assert second.compare(first) == 1
+            clear_cache()
+            assert sorted([first, second], key=default_sort_key) == [first, second]
+            clear_cache()
+            assert sorted([second, first], key=default_sort_key) == [first, second]
+
+
+def test_native_and_sympy_argument_identity():
+    for native, symbolic in [(1, S.One), (1.0, Float(1)),
+            (True, S.true), (False, S.false), ((1,), Tuple(1))]:
+        first, second = Basic(native), Basic(symbolic)
+        assert first.xreplace({native: S(2)}) == first
+        assert second.xreplace({native: S(2)}) == Basic(S(2))
+        assert first != second
+        assert second != first
+
+
+def test_argument_kinds_before_equality():
+    class Value:
+        def __eq__(self, other):
+            raise RuntimeError('native equality failed')
+
+        __hash__ = object.__hash__
+
+    for native in (Fraction(1), Value()):
+        for symbolic in (S.One, Float(1), Symbol):
+            for wrap in (lambda value: value, lambda value: (value,),
+                         lambda value: ((value,),), lambda value: frozenset([value])):
+                first, second = Basic(wrap(native)), Basic(wrap(symbolic))
+                assert first != second and second != first
+                assert first.compare(second) == -second.compare(first) != 0
+                assert default_sort_key(first) != default_sort_key(second)
+
+    for wrap in (lambda value: value, lambda value: (value,)):
+        assert raises(RuntimeError,
+            lambda: Basic(wrap(Value())) == Basic(wrap(Value()))).value.args == ('native equality failed',)
+
+
+def test_argument_equality_short_circuit():
+    class Value(Basic):
+        def __eq__(self, other):
+            raise RuntimeError('unreached equality')
+
+        __hash__ = Basic.__hash__
+
+    first_value, second_value = Value(0), Value(1)
+    for first, second in [
+        (Basic(0, first_value), Basic(1, second_value)),
+        (Basic((0, first_value)), Basic((1, second_value))),
+        (Basic(first_value), Basic(second_value, second_value)),
+        (Basic((first_value,)), Basic((second_value, second_value))),
+    ]:
+        assert first != second and second != first
+
+
+def test_number_argument_identity_is_symmetric():
+    class Alias(Basic):
+        def __eq__(self, other):
+            if isinstance(other, Alias):
+                other = other.args[0]
+            return self.args[0] == other
+
+        def __hash__(self):
+            return hash(self.args[0])
+
+    for number in (S.One, Float(1)):
+        for wrap in (lambda value: value, lambda value: (value,),
+                     lambda value: frozenset([value])):
+            first, second = Basic(wrap(Alias(number))), Basic(wrap(number))
+            assert first != second and second != first
+            assert first.compare(second) == -second.compare(first) != 0
+            for left, right in ((first, second), (second, first)):
+                clear_cache()
+                assert default_sort_key(left) != default_sort_key(right)
+                functions = [Function('number_argument_identity', value=value)
+                             for value in (left, right)]
+                assert functions[0] != functions[1]
+                assert functions[1] != functions[0]
+
+
+def test_symbol_equality_compatibility():
+    class Name(str):
+        __slots__ = ()
+
+    class SymbolSubclass(Symbol):
+        def _hashable_content(self):
+            return ()
+
+    values = [Symbol('x'), Symbol('y'), Symbol('x', positive=True),
+              Symbol(Name('name')), Symbol('name'), Dummy('x'),
+              SymbolSubclass('x'), SymbolSubclass('y')]
+    for first in values:
+        for second in [*values, S.One, Float(1), Basic(), 1, 'x', None]:
+            assert first.__eq__(second) is Basic.__eq__(first, second)
+            if first == second:
+                assert hash(first) == hash(second)
+
+    class FailingName(str):
+        __slots__ = ()
+
+        def __eq__(self, other):
+            raise RuntimeError('symbol name equality failed')
+
+        __hash__ = str.__hash__
+
+    first = Symbol.__xnew__(Symbol, FailingName('first'))
+    second = Symbol.__xnew__(Symbol, 'second')
+    assert raises(RuntimeError,
+        lambda: first == second).value.args == ('symbol name equality failed',)
+
+
+def test_native_argument_equality_without_ordering():
+    for first, second in [(None, None), (1, 1 + 0j)]:
+        first, second = Basic(first), Basic(second)
+        assert first == second
+        assert first.compare(second) == second.compare(first) == 0
+        clear_cache()
+        first_key = first.sort_key()
+        clear_cache()
+        assert first_key == second.sort_key()
+
+
+def test_native_and_class_argument_identity():
+    class Value:
+        def __eq__(self, other):
+            return other is Symbol or isinstance(other, Value)
+
+        def __hash__(self):
+            return hash(Symbol)
+
+    first, second = Basic(Symbol), Basic(Value())
+    assert first.xreplace({Symbol: S(2)}) == Basic(S(2))
+    assert second.xreplace({Symbol: S(2)}) == second
+    assert first != second and second != first
+
+
+def test_subs_class_arguments():
+    x, y = symbols('x y')
+    f, g = Function('f'), Function('g')
+    for cls in (f, Symbol):
+        source = Basic(cls, x)
+        assert source.subs(x, y) == Basic(cls, y)
+        assert source.subs(cls, g) == Basic(g, x)
+        assert source.xreplace({x: y}) == Basic(cls, y)
+        assert source.xreplace({cls: g}) == Basic(g, x)
+        assert source.replace(lambda node: node == x, lambda node: y) == Basic(cls, y)
+        assert source.has(x)
+        assert not source.has(y)
+
+
+def test_free_symbols_class_arguments():
+    x, y = symbols('x y')
+    function = Function('f')
+    for cls in (function, Symbol, int):
+        source = Basic(cls, x + y)
+        assert source.free_symbols == {x, y}
+    for cls in (function, Symbol):
+        bound = Lambda(x, Tuple(cls, x, y))
+        assert bound.free_symbols == {y}
+        assert bound.as_dummy().free_symbols == {y}
+
+    class Value:
+        free_symbols = {y}
+
+    assert Basic(Value(), x).free_symbols == {x, y}
+
+
+def test_rewrite_class_arguments():
+    x = Symbol('x')
+    for cls in (Function('f'), Symbol, int):
+        source = Basic(cls, sin(x))
+        expected = Basic(cls, sin(x).rewrite(exp))
+        assert source.rewrite(exp) == expected
+        assert source.rewrite(sin, exp) == expected
+        assert source.rewrite(exp, deep=False) == source
 
 
 def test_equality():
@@ -101,6 +1136,46 @@ def test_equality():
     assert not bar != b
 
 
+def test_class_alias_instance_identity():
+    class AliasMeta(type):
+        def __eq__(cls, other):
+            return isinstance(other, AliasMeta)
+
+        def __hash__(cls):
+            return 0
+
+    for names in (('Alias', 'Alias'), ('First', 'Second')):
+        first, second = [AliasMeta(name, (Basic,), {}) for name in names]
+        assert first == second and hash(first) == hash(second)
+        left, right = first(b1), second(b1)
+        assert left != right and Basic(left) != Basic(right)
+        assert len({left, right}) == 2
+        assert left.compare(right) == -right.compare(left) != 0
+        numbers = [AliasMeta(name, (Basic,), {
+            'is_Number': True, '__hash__': lambda self: 0})() for name in names]
+        assert numbers[0] == numbers[1] and hash(numbers[0]) == hash(numbers[1])
+        assert Basic(numbers[0]) != Basic(numbers[1])
+        assert not Basic.is_same(numbers[0], numbers[1])
+        assert numbers[0].replace(lambda node: node is numbers[0],
+                                  lambda node: numbers[1]) is numbers[1]
+
+
+def test_compare_actual_instance_class():
+    class PretendingBasic(Basic):
+        @property
+        def __class__(self):
+            return self.reported_class
+
+    first, second = PretendingBasic(1), PretendingBasic(1)
+    first.reported_class, second.reported_class = Basic, Symbol
+    assert first == second and hash(first) == hash(second)
+    assert Basic.is_same(first, second)
+    assert first.compare(second) == second.compare(first) == 0
+    plain = Basic(1)
+    assert plain != first
+    assert plain.compare(first) == -first.compare(plain) != 0
+
+
 def test_matches_basic():
     instances = [Basic(b1, b1, b2), Basic(b1, b2, b1), Basic(b2, b1, b1),
                  Basic(b1, b2), Basic(b2, b1), b2, b1]
@@ -113,6 +1188,20 @@ def test_matches_basic():
     assert b1.match(b1) == {}
 
 
+def test_structural_query_metaclass_hash():
+    def reject_class_hash(cls):
+        raise ValueError('receiver class hashing is unavailable')
+
+    x, y = symbols('x y')
+    for class_hash in (None, reject_class_hash):
+        meta = type('Meta', (type,), {'__hash__': class_hash})
+        node_type = meta('Node', (Basic,), {})
+        value = node_type(x)
+        assert value.has(x) and not value.has(y)
+        assert value.has_free(x) and not value.has_free(y)
+        assert value.sort_key() == value.sort_key()
+
+
 def test_has():
     assert b21.has(b1)
     assert b21.has(b3, b1)
@@ -121,6 +1210,263 @@ def test_has():
     assert not b21.has()
     assert not b21.has(str)
     assert not Symbol("x").has("x")
+
+
+def test_structural_query_class_patterns():
+    checks = []
+
+    class Meta(type):
+        def __eq__(cls, other):
+            return isinstance(other, Meta)
+
+        def __hash__(cls):
+            return 0
+
+        def __instancecheck__(cls, value):
+            checks.append(cls)
+            return type.__instancecheck__(cls, value)
+
+    first, second = [Meta(name, (Basic,), {}) for name in ('First', 'Second')]
+    assert first == second and first is not second
+    x = Symbol('class_pattern_x')
+    value = first(x)
+    for source in (value, Basic(value), Lambda(Symbol('bound'), value)):
+        for name in ('has', 'has_free'):
+            method = getattr(source, name)
+            for patterns in ((first, second), (second, first)):
+                clear_cache()
+                assert [method(pattern) for pattern in patterns] == [
+                    pattern is first for pattern in patterns]
+                clear_cache()
+                assert method(*patterns)
+    for name in ('has', 'has_free'):
+        checks.clear()
+        assert not getattr(Basic, name).__wrapped__(Basic(), second, second)
+        assert len(checks) == 1 and checks[0] is second
+    source = Basic(first)
+    assert not source.has(first)
+    assert not source.has_free(first)
+    assert source.has_xfree({first})
+
+
+def test_has_free_native_class_literals():
+    class Literal:
+        pass
+
+    class Missing:
+        pass
+
+    x = Symbol('native_class_x')
+    for literal in (int, str, type, Literal):
+        for wrap in (Basic, lambda value: Basic(value, x),
+                     lambda value: Basic(Basic(value)),
+                     lambda value: Basic(Basic(value), x)):
+            source = wrap(literal)
+            for patterns in ((literal,), (literal, Missing), (Missing, literal)):
+                assert source.has_free(*patterns)
+                assert source.has_free(*patterns)
+            assert not source.has_free(Missing)
+
+
+def test_has_free_equal_native_class_literals():
+    class Meta(type):
+        def __eq__(cls, other):
+            return isinstance(other, Meta) and cls.label == other.label
+
+        def __hash__(cls):
+            return hash(cls.label)
+
+    first, alias, other = [Meta(name, (), {'args': (), 'label': label})
+                          for name, label in (('First', 0), ('Alias', 0), ('Other', 1))]
+    assert first == alias and first is not alias
+    for wrap in (Basic, lambda value: Basic(Basic(value))):
+        source = wrap(first)
+        for patterns in ((first, alias, other), (other, alias, first)):
+            clear_cache()
+            assert [source.has_free(pattern) for pattern in patterns] == [
+                pattern is not other for pattern in patterns]
+            assert source.has_free(*patterns)
+        assert not wrap(first()).has_free(first)
+
+
+def test_has_free_native_and_basic_class_patterns():
+    class Meta(type):
+        def __eq__(cls, other):
+            return other is Symbol or isinstance(other, Meta)
+
+        def __hash__(cls):
+            return hash(Symbol)
+
+    class Literal(metaclass=Meta):
+        pass
+
+    assert Literal == Symbol and hash(Literal) == hash(Symbol)
+    for source in (Basic(Literal), Basic(Symbol)):
+        for patterns in ((Literal, Symbol), (Symbol, Literal)):
+            clear_cache()
+            assert [source.has_free(pattern) for pattern in patterns] == [
+                pattern is Literal for pattern in patterns]
+            assert source.has_free(*patterns)
+            assert source.has_xfree({Literal})
+
+
+def test_has_free_native_class_literals_in_bindings():
+    class Literal:
+        pass
+
+    x = Symbol('bound_class_x')
+    for literal in (int, str, type, Literal):
+        for source in (Lambda(x, Basic(literal)), Subs(Basic(literal, x), x, 0)):
+            assert source.has_free(literal)
+            assert source.has_xfree({literal})
+            assert not source.has_free(x)
+
+
+def test_structural_query_unhashable_class_patterns():
+    class Meta(type):
+        __hash__ = None
+
+    first, second = [Meta(name, (Basic,), {}) for name in ('First', 'Second')]
+    value = first(Symbol('class_pattern_x'))
+    for name in ('has', 'has_free'):
+        method = getattr(value, name)
+        assert method(first)
+        assert not method(second)
+        assert method(second, first)
+
+
+def test_structural_query_pattern_type_identity():
+    class Meta(type):
+        def __eq__(cls, other):
+            return isinstance(other, Meta)
+
+        def __hash__(cls):
+            return 0
+
+    class Pattern(Basic):
+        def __eq__(self, other):
+            return isinstance(other, Pattern)
+
+        def __hash__(self):
+            return 0
+
+    first = Meta('FirstPattern', (Pattern,), {
+        '_has_matcher': lambda self: lambda node: True})()
+    second = Meta('SecondPattern', (Pattern,), {
+        '_has_matcher': lambda self: lambda node: False})()
+    assert first == second and hash(first) == hash(second)
+    assert type(first) == type(second) and type(first) is not type(second)
+    value = Basic()
+    for name in ('has', 'has_free'):
+        method = getattr(value, name)
+        for patterns in ((first, second), (second, first)):
+            clear_cache()
+            assert [method(pattern) for pattern in patterns] == [
+                pattern is first for pattern in patterns]
+
+
+def test_structural_query_multiple_value_patterns():
+    calls = []
+    for class_hash in (None, lambda cls: 0):
+        class Meta(type):
+            __hash__ = class_hash
+
+            def __eq__(cls, other):
+                return type(cls) is type(other)
+
+        class Pattern(Basic):
+            def __eq__(self, other):
+                return isinstance(other, Pattern)
+
+            def __hash__(self):
+                return 0
+
+            def _has_matcher(self):
+                calls.append(type(self))
+                return lambda node: self.accepts
+
+        rejected_type = Meta('RejectedPattern', (Pattern,), {'accepts': False})
+        accepted_type = Meta('AcceptedPattern', (Pattern,), {'accepts': True})
+        rejected, alias, accepted = rejected_type(), rejected_type(), accepted_type()
+        assert rejected == accepted and hash(rejected) == hash(accepted)
+        assert rejected_type == accepted_type and rejected_type is not accepted_type
+        for source in (Basic(), Basic(Basic()), Lambda(Symbol('bound'), Basic())):
+            for name in ('has', 'has_free'):
+                method = getattr(source, name)
+                for patterns in ((rejected, accepted), (accepted, rejected),
+                                 (rejected, alias, accepted)):
+                    clear_cache()
+                    assert method(*patterns)
+                calls.clear()
+                assert not getattr(Basic, name).__wrapped__(source, rejected, alias)
+                assert len(calls) == 1 and calls[0] is rejected_type
+
+
+def test_structural_query_value_and_class_patterns():
+    class Meta(type):
+        def __eq__(cls, other):
+            return other is type or isinstance(other, Meta)
+
+        def __hash__(cls):
+            return hash(type)
+
+    class Value(Basic):
+        def __eq__(self, other):
+            return other is Symbol or isinstance(other, Value)
+
+        def __hash__(self):
+            return hash(Symbol)
+
+    pattern = Meta('Pattern', (Value,), {})()
+    value = Value()
+    assert value == pattern == Symbol and value == Symbol
+    assert hash(value) == hash(pattern) == hash(Symbol)
+    assert type(pattern) == type and type(pattern) is not type
+    for name in ('has', 'has_free'):
+        method = getattr(value, name)
+        for patterns in ((pattern, Symbol), (Symbol, pattern)):
+            clear_cache()
+            assert [method(arg) for arg in patterns] == [arg is pattern for arg in patterns]
+
+
+def test_structural_query_pattern_metaclass_change():
+    class MetaMeta(type):
+        def __eq__(cls, other):
+            return isinstance(other, MetaMeta)
+
+        def __hash__(cls):
+            return 0
+
+    class First(type, metaclass=MetaMeta):
+        def __instancecheck__(cls, value):
+            return True
+
+    class Second(type, metaclass=MetaMeta):
+        def __instancecheck__(cls, value):
+            return False
+
+    assert First == Second and First is not Second
+    pattern = First('Pattern', (Basic,), {})
+    value = Basic()
+    for name in ('has', 'has_free'):
+        method = getattr(value, name)
+        pattern.__class__ = First
+        assert method(pattern)
+        pattern.__class__ = Second
+        assert not method(pattern)
+        pattern.__class__ = First
+        assert method(pattern)
+
+
+def test_native_argument_query_cache():
+    for wrap in (lambda value: value, Basic, Tuple):
+        expressions = [wrap(Basic(value)) for value in (1, 1.0)]
+        assert expressions[0] == expressions[1]
+        for method in ('has', 'has_free'):
+            for order in ((0, 1), (1, 0)):
+                clear_cache()
+                results = [getattr(expressions[i], method)(S.One) for i in order]
+                assert results == [i == 0 for i in order]
 
 
 def test_subs():
@@ -284,6 +1630,192 @@ def test_as_dummy():
         assert D != d and D.func == Dummy and D.is_real is None
     assert Dummy().as_dummy().is_commutative
     assert Dummy(commutative=False).as_dummy().is_commutative is False
+
+
+def test_as_dummy_native_arguments():
+    class Node:
+        def __init__(self, arg):
+            self.args = (arg,)
+
+        @property
+        def func(self):
+            return type(self)
+
+        _xreplace = Basic._xreplace
+
+    x, canonical = symbols('x _0')
+    source = Basic(Node(Integral(x, (x, 0, 1))))
+    result = source.as_dummy().args[0].args[0]
+    assert result == Integral(canonical, (canonical, 0, 1))
+
+
+def test_transform_native_leaf_arguments():
+    class Children:
+        _iterable = False
+
+        def __iter__(self):
+            raise AssertionError('iteration is disabled')
+
+    class Leaf:
+        def __init__(self, args):
+            self.args = args
+
+    x, y, canonical = symbols('x y _0')
+    for args in (None, 0, 1, Children()):
+        leaf = Leaf(args)
+        source = Basic(leaf, Integral(x, (x, 0, 1)), y)
+        assert source.as_dummy() == Basic(leaf, Integral(canonical, (canonical, 0, 1)), y)
+        assert source.replace(lambda node: node == y,
+                              lambda node: x) == Basic(leaf, Integral(x, (x, 0, 1)), x)
+        expected = source if args is None else Basic(x, Integral(x, (x, 0, 1)), y)
+        assert source.replace(lambda node: node is leaf, lambda node: x) == expected
+
+
+def test_replace_class_predicates():
+    class Literal:
+        args = ()
+
+    class Replacement:
+        args = ()
+
+    class LiteralBasic(Basic):
+        pass
+
+    class ReplacementBasic(Basic):
+        pass
+
+    x = Symbol('x')
+    classes = [(Literal, Replacement), (LiteralBasic, ReplacementBasic),
+               (Function('literal_replace'), Function('replacement_replace'))]
+    wrappers = [Basic, lambda item: Basic(item, x),
+                lambda item: Basic(Basic(item), x)]
+    for original, replacement in classes:
+        for wrap in wrappers:
+            for simultaneous in (False, True):
+                for mapping in (False, True):
+                    visits = []
+
+                    def query(node):
+                        visits.append(node)
+                        return node is original
+
+                    result = wrap(original).replace(query, lambda node: replacement,
+                        simultaneous=simultaneous, map=mapping)
+                    if mapping:
+                        result, changes = result
+                        assert changes == {original: replacement}
+                    assert _aresame(result, wrap(replacement))
+                    assert sum(node is original for node in visits) == 1
+
+
+def test_replace_class_type_queries():
+    class Meta(type):
+        def __getattribute__(cls, name):
+            if name == 'args':
+                raise AssertionError('classes have no expression children')
+            return super().__getattribute__(name)
+
+    class Literal(metaclass=Meta):
+        pass
+
+    class Replacement(metaclass=Meta):
+        pass
+
+    x = Symbol('x')
+    for wrap in (Basic, lambda item: Basic(item, x),
+                 lambda item: Basic(Basic(item), x)):
+        for simultaneous in (False, True):
+            for mapping in (False, True):
+                calls = []
+
+                def value(*children):
+                    calls.append(children)
+                    return Replacement
+
+                result = wrap(Literal).replace(Meta, value,
+                    simultaneous=simultaneous, map=mapping)
+                if mapping:
+                    result, changes = result
+                    assert changes == {Literal: Replacement}
+                assert _aresame(result, wrap(Replacement))
+                assert calls == [()]
+
+
+def test_replace_class_expression_queries_and_bindings():
+    x, y, canonical = symbols('x y _0')
+    for literal in (Basic, Symbol, Subs, Integral, Function('literal_binding')):
+        source = Basic(literal, Integral(x, (x, 0, 1)), x)
+        assert source.replace(x, y) == Basic(literal, Integral(y, (y, 0, 1)), y)
+        assert source.as_dummy() == Basic(literal, Integral(canonical, (canonical, 0, 1)), x)
+
+
+def test_replace_class_callback_errors():
+    class Literal:
+        args = ()
+
+    for literal in (Literal, Symbol):
+        for phase in ('query', 'value'):
+            for simultaneous in (False, True):
+                for mapping in (False, True):
+                    error = ValueError('class replacement failed')
+                    calls = []
+
+                    def query(node):
+                        if node is literal:
+                            calls.append(node)
+                            if phase == 'query':
+                                raise error
+                            return True
+                        return False
+
+                    def value(node):
+                        calls.append(node)
+                        raise error
+
+                    caught = raises(ValueError, lambda: Basic(literal).replace(
+                        query, value, simultaneous=simultaneous, map=mapping))
+                    assert caught.value is error
+                    assert calls == [literal]*(1 if phase == 'query' else 2)
+
+
+def test_replace_native_child_sequences():
+    x, y, z = symbols('x y z')
+    for factory in (tuple, list, iter):
+        class Node:
+            @property
+            def args(self):
+                return factory((x,))
+
+        node = Node()
+        for source in (Basic(node, y), Basic(y, node)):
+            result, changes = source.replace(lambda item: False, lambda item: z, map=True)
+            assert result is source
+            assert changes == {}
+            result = source.replace(lambda item: item is y, lambda item: z)
+            assert result.args == tuple(z if item is y else item for item in source.args)
+
+
+def test_replace_native_child_sequences_simultaneous():
+    y, z, t = symbols('y z t')
+    for factory in (tuple, list, iter):
+        class Projection:
+            @property
+            def args(self):
+                return factory((y, z))
+
+            @staticmethod
+            def func(*children):
+                return children[0]
+
+        source = Basic(Projection())
+        for simultaneous in (False, True):
+            for mapping in (False, True):
+                result = source.replace(lambda item: item is y or item is z,
+                    lambda item: {y: z, z: t}[item], simultaneous=simultaneous, map=mapping)
+                if mapping:
+                    result, changes = result
+                    assert changes == {y: z, z: t}
+                assert result == Basic(z if simultaneous else t)
 
 
 def test_as_dummy_scopes():

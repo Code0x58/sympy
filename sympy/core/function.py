@@ -35,28 +35,37 @@ from __future__ import annotations
 from typing import Any
 from collections.abc import Iterable
 import copyreg
+import os
+from decimal import Decimal
+from itertools import count as _count
+from threading import RLock
+from weakref import ref, WeakKeyDictionary
 
 from .add import Add
-from .basic import Basic, _atomic
-from .cache import cacheit
+from .assumptions import _assume_defined
+from .basic import (Atom, Basic, _atomic, _is_class, _is_standard_number,
+                    _get_postprocessors_for_type, _get_type_attribute,
+                    _builtin_container_type, _tuple_comparison_type)
+from .cache import cacheit, cached_property, cacheit_by_identity, _IdentityKey as _ClassIdentity
 from .containers import Tuple, Dict
 from .decorators import _sympifyit
 from .evalf import pure_complex
 from .expr import Expr, AtomicExpr
 from .logic import fuzzy_and, fuzzy_or, fuzzy_not, FuzzyBool
 from .mul import Mul
-from .numbers import Rational, Float, Integer
+from .numbers import Rational, Float, Integer, Number, Infinity, NegativeInfinity
 from .operations import LatticeOp
-from .parameters import global_parameters
+from .parameters import global_parameters, evaluate, distribute, _exp_is_pow
 from .rules import Transform
-from .singleton import S
+from .singleton import S, Singleton
 from .sympify import sympify, _sympify
+from .traversal import iterargs
 
 from .sorting import default_sort_key, ordered
 from sympy.utilities.exceptions import (sympy_deprecation_warning,
                                         SymPyDeprecationWarning, ignore_warnings)
 from sympy.utilities.iterables import (has_dups, sift, iterable,
-    is_sequence, uniq, topological_sort)
+    is_sequence, uniq, topological_sort, numbered_symbols)
 from sympy.utilities.lambdify import MPMATH_TRANSLATIONS
 from sympy.utilities.misc import as_int, filldedent, func_name
 
@@ -171,6 +180,25 @@ def arity(cls):
         lambda p:p.default == p.empty, binary=True))
     return no if not yes else tuple(range(no, no + yes + 1))
 
+def _canonical_nargs(nargs):
+    """Normalize arity for construction, comparison, and caching."""
+    if getattr(nargs, 'sup', None) is S.Infinity and hasattr(nargs, 'is_FiniteSet'):
+        return nargs
+    if is_sequence(nargs):
+        if not nargs:
+            raise ValueError(filldedent('''
+                Incorrectly specified nargs as %s:
+                if there are no arguments, it should be
+                `nargs = 0`;
+                if there are any number of arguments,
+                it should be
+                `nargs = None`''' % str(nargs)))
+        return tuple(ordered(set(nargs)))
+    if nargs is not None:
+        return (as_int(nargs),)
+    return None
+
+
 class FunctionClass(type):
     """
     Base class for function classes. FunctionClass is a subclass of type.
@@ -192,24 +220,7 @@ class FunctionClass(type):
                 else:
                     continue
 
-        # Canonicalize nargs here; change to set in nargs.
-        if getattr(nargs, 'sup', None) is S.Infinity and hasattr(nargs, 'is_FiniteSet'):
-            # an unbounded set of integers, e.g. Naturals or Range(3, oo),
-            # is kept as-is (importing it here would cause a cyclic import)
-            pass
-        elif is_sequence(nargs):
-            if not nargs:
-                raise ValueError(filldedent('''
-                    Incorrectly specified nargs as %s:
-                    if there are no arguments, it should be
-                    `nargs = 0`;
-                    if there are any number of arguments,
-                    it should be
-                    `nargs = None`''' % str(nargs)))
-            nargs = tuple(ordered(set(nargs)))
-        elif nargs is not None:
-            nargs = (as_int(nargs),)
-        cls._nargs = nargs
+        cls._nargs = _canonical_nargs(nargs)
 
         # When __init__ is called from UndefinedFunction it is called with
         # just one arg but when it is called from subclassing Function it is
@@ -313,6 +324,12 @@ class FunctionClass(type):
         return cls.__name__
 
 
+def _can_substitute_function(expr, old, new):
+    """Match callable function heads and the replacement's argument count."""
+    return (callable(old) and callable(new) and old == expr.func
+            and len(expr.args) in new.nargs)
+
+
 class Application(Basic, metaclass=FunctionClass):
     """
     Base class for applied functions.
@@ -326,7 +343,7 @@ class Application(Basic, metaclass=FunctionClass):
 
     is_Function = True
 
-    @cacheit
+    @cacheit_by_identity
     def __new__(cls, *args, **options):
         from sympy.sets.fancysets import Naturals0
         from sympy.sets.sets import FiniteSet
@@ -412,10 +429,59 @@ class Application(Basic, metaclass=FunctionClass):
         return self.__class__
 
     def _eval_subs(self, old, new):
-        if (old.is_Function and new.is_Function and
-            callable(old) and callable(new) and
-            old == self.func and len(self.args) in new.nargs):
+        if (old.is_Function and new.is_Function
+                and _can_substitute_function(self, old, new)):
             return new(*[i._subs(old, new) for i in self.args])
+
+
+_missing_type_attribute = object()
+
+
+def _has_type_attribute(value, name):
+    """Test a type attribute without invoking user lookup hooks."""
+    return _get_type_attribute(value, name,
+        _missing_type_attribute) is not _missing_type_attribute
+
+
+def _has_function_behavior(options):
+    """Identify options that can inspect their owning function class."""
+    # A static numerical implementation has no class or instance receiver.
+    return '__new__' in options or any(
+        _has_type_attribute(value, '__set_name__')
+        or (_has_type_attribute(value, '__get__')
+            and not (name == '_imp_' and type(value) is staticmethod))
+        for name, value in options.items())
+
+
+def _has_class_behavior(cls, trusted_base, modules=()):
+    """Find custom methods anywhere in the actual inheritance order."""
+    if inspect.getattr_static(cls, 'mro') is not type.mro:
+        return True
+    trusted = type.__dict__['__mro__'].__get__(trusted_base)
+    for base in type.__dict__['__mro__'].__get__(cls):
+        if any(base is parent for parent in trusted):
+            continue
+        namespace = type.__dict__['__dict__'].__get__(base)
+        module_name = namespace.get('__module__')
+        module = (inspect.getmodule(base)
+                  if type(module_name) is str and module_name in modules else None)
+        if (module is not None and module.__name__ in modules
+                and module.__dict__.get(base.__name__) is base):
+            continue
+        if any((callable(value) or _has_type_attribute(value, '__get__'))
+               and not (name in ('__dict__', '__weakref__')
+                        and inspect.isgetsetdescriptor(value))
+               for name, value in namespace.items()):
+            return True
+    return False
+
+
+@cacheit
+def _new_function(metadata_key, cls, /, *args, **options):
+    """Cache construction using original arguments and normalized metadata."""
+    if cls is Function:
+        return UndefinedFunction(*args, **options)
+    return cls._new_(*args, **options)
 
 
 class Function(Application, Expr):
@@ -480,13 +546,17 @@ class Function(Application, Expr):
     def _diff_wrt(self):
         return False
 
-    @cacheit
     def __new__(cls, *args, **options) -> type[AppliedUndef]:  # type: ignore
-        # Handle calls like Function('f')
         if cls is Function:
-            return UndefinedFunction(*args, **options)  # type: ignore
+            if (len(args) != 1 or options and ('bases' in options
+                    or options.get('__dict__') is not None
+                    or _has_function_behavior(options))):
+                return UndefinedFunction(*args, **options)
+            key = _function_metadata_key(options)
         else:
-            return cls._new_(*args, **options)  # type: ignore
+            key = (None if type(cls) is FunctionClass or type(cls) is UndefinedFunction
+                   else id(cls))
+        return _new_function(key, cls, *args, **options)
 
     @classmethod
     def _new_(cls, *args, **options) -> Expr:
@@ -869,7 +939,7 @@ class Function(Application, Expr):
 class DefinedFunction(Function):
     """Base class for defined functions like ``sin``, ``cos``, ..."""
 
-    @cacheit
+    @cacheit_by_identity
     def __new__(cls, *args, **options) -> Expr:  # type: ignore
         return cls._new_(*args, **options)
 
@@ -930,6 +1000,202 @@ class UndefSageHelper:
 _undef_sage_helper = UndefSageHelper()
 
 
+def _class_order_key(cls):
+    """Order distinct class definitions by name and process-local identity."""
+    names = type(cls).__name__, cls.__name__, str(cls.__module__), cls.__qualname__
+    # Name subclasses must not retain their owning classes through the cache.
+    return tuple(map(str.__str__, names)) + (id(cls),)
+
+
+class _ComparisonKey:
+    """Give hashable equality classes a stable order while their keys are live."""
+    __slots__ = ('value', 'order', '_hash', '__weakref__')
+
+    def __init__(self, value):
+        self.value = value
+        self._hash = hash(value)
+        self.order = None
+
+    def __hash__(self):
+        return self._hash
+
+    def __eq__(self, other):
+        if not isinstance(other, _ComparisonKey):
+            return NotImplemented
+        return self.value == other.value
+
+    def __lt__(self, other):
+        if not isinstance(other, _ComparisonKey):
+            return NotImplemented
+        if self is other:
+            return False
+        self_is_class = _is_class(self.value)
+        other_is_class = _is_class(other.value)
+        if self_is_class != other_is_class:
+            return self_is_class < other_is_class
+        return self.order < other.order
+
+    def __repr__(self):
+        return f'_ComparisonKey({self.order!r})'
+
+    def __reduce__(self):
+        return _get_comparison_key, (self.value,)
+
+
+class _ClassOrderBucket:
+    __slots__ = ('entries', 'epoch')
+
+    def __init__(self):
+        self.entries = []
+        self.epoch = 0
+
+
+_comparison_keys = WeakKeyDictionary()
+_comparison_key_indices = _count()
+_comparison_key_lock = RLock()
+_class_order_keys = {}
+
+
+def _reset_comparison_key_lock():
+    global _comparison_key_lock
+    # Preserve a surviving owner's lock and its recursion depth.
+    if _comparison_key_lock.acquire(blocking=False):
+        _comparison_key_lock.release()
+    else:
+        _comparison_key_lock = RLock()
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_reset_comparison_key_lock)
+
+
+def _get_comparison_key(value):
+    candidate = _ComparisonKey(value)
+    if _is_class(value):
+        # Register the actual alias even when interning returns another class.
+        candidate.order = _get_class_order_key(value, candidate._hash)
+    with _comparison_key_lock:
+        if candidate.order is None:
+            candidate.order = next(_comparison_key_indices)
+        # Atomic insertion preserves representatives when equality reenters.
+        # Retry if a weak representative disappears before dereferencing it.
+        while True:
+            key = _comparison_keys.setdefault(candidate, ref(candidate))()
+            if key is not None:
+                return key
+
+
+def _get_class_order_key(cls, cls_hash):
+    """Retain an equality class's order while any registered class is alive."""
+    candidate = None
+    while True:
+        with _comparison_key_lock:
+            bucket = _class_order_keys.get(cls_hash)
+            if bucket is None:
+                bucket = _class_order_keys.setdefault(cls_hash, _ClassOrderBucket())
+            epoch = bucket.epoch
+            snapshot = tuple(bucket.entries)
+            for reference, key in snapshot:
+                if reference() is cls:
+                    return key
+            key = None
+            for reference, existing in snapshot:
+                other = reference()
+                if other is not None and other == cls:
+                    key = existing
+                    break
+            # Equality and collection can reenter and change the registry.
+            if epoch != bucket.epoch:
+                continue
+            if key is None and candidate is not None:
+                # Aliases can retain a snapshot after its original class dies.
+                key = candidate + (next(_comparison_key_indices),)
+            if key is not None:
+                def remove(reference, bucket=bucket, cls_hash=cls_hash):
+                    with _comparison_key_lock:
+                        i = 0
+                        while i < len(bucket.entries):
+                            if bucket.entries[i][0] is reference:
+                                del bucket.entries[i]
+                                bucket.epoch += 1
+                                break
+                            i += 1
+                        if not bucket.entries and _class_order_keys.get(cls_hash) is bucket:
+                            del _class_order_keys[cls_hash]
+
+                entry = ref(cls, remove), key
+                if epoch != bucket.epoch:
+                    continue
+                bucket.entries.append(entry)
+                bucket.epoch += 1
+                return key
+        candidate = _class_order_key(cls)
+
+
+def _metadata_type_key(cls):
+    """Preserve actual class identity even with custom metaclass semantics."""
+    if type(cls) is type or (
+            _get_type_attribute(cls, '__eq__') is type.__eq__
+            and _get_type_attribute(cls, '__hash__') is type.__hash__):
+        return cls
+    return _get_comparison_key(_ClassIdentity(cls))
+
+
+@cacheit
+def _finite_set_class():
+    from sympy.sets.sets import FiniteSet
+    return FiniteSet
+
+
+def _canonical_function_metadata(value):
+    """Canonicalize standard values, retaining complete subclass identities."""
+    if issubclass(type(value), Basic):
+        if issubclass(type(value), Tuple):
+            if type(value) is not Tuple:
+                return (_metadata_type_key(type(value)), value)
+            return (Tuple, tuple(map(_canonical_function_metadata, value.args)))
+        FiniteSet = _finite_set_class()
+        if issubclass(type(value), FiniteSet) or value is S.EmptySet:
+            if type(value) is not FiniteSet and value is not S.EmptySet:
+                return (_metadata_type_key(type(value)), value)
+            return (type(value), frozenset(map(_canonical_function_metadata, value.args)))
+        return value
+    if _is_standard_number(value):
+        if type(value) is Decimal and value.is_finite():
+            return Rational(*value.as_integer_ratio())
+        return sympify(value)
+    # Built-in container equality uses stored contents, not overridden iteration.
+    container = _builtin_container_type(value)
+    if container is tuple:
+        kind = _tuple_comparison_type(value)
+        marker = Tuple if kind is tuple else _metadata_type_key(kind)
+        return (marker, tuple(map(_canonical_function_metadata, tuple.__iter__(value))))
+    if container is frozenset:
+        FiniteSet = _finite_set_class()
+        cls = FiniteSet if frozenset.__len__(value) else S.EmptySet.func
+        return (cls, frozenset(map(_canonical_function_metadata, frozenset.__iter__(value))))
+    return (_metadata_type_key(type(value)), value)
+
+
+_empty_function_metadata = frozenset()
+
+
+def _function_metadata_key(kwargs):
+    if not kwargs:
+        return _empty_function_metadata
+    from .symbol import _filter_assumptions
+    assumptions, kwargs = _filter_assumptions(kwargs)
+    kwargs.update(assumptions)
+    if 'nargs' in kwargs:
+        kwargs['nargs'] = _canonical_nargs(kwargs['nargs'])
+    if (not global_parameters.evaluate or not global_parameters.distribute
+            or global_parameters.exp_is_pow):
+        with evaluate(True), distribute(True), _exp_is_pow(False):
+            return _function_metadata_key(kwargs)
+    return frozenset((key, _canonical_function_metadata(value))
+        for key, value in kwargs.items())
+
+
 class UndefinedFunction(FunctionClass):
     """
     The (meta)class of undefined functions.
@@ -939,6 +1205,15 @@ class UndefinedFunction(FunctionClass):
 
     def __new__(mcl, name, bases=(AppliedUndef,), __dict__=None, **kwargs) -> type[AppliedUndef]:
         from .symbol import _filter_assumptions
+        if isinstance(__dict__, dict) and type(__dict__) is not dict:
+            __dict__ = dict.copy(__dict__)
+        # Only factory functions have identity determined by name and options.
+        is_factory = (isinstance(bases, tuple) and tuple.__len__(bases) == 1
+                      and tuple.__getitem__(bases, 0) is AppliedUndef and not __dict__
+                      and not _has_function_behavior(kwargs)
+                      and (mcl is UndefinedFunction
+                           or not (_has_class_behavior(mcl, UndefinedFunction)
+                                   or _has_class_behavior(type(mcl), type))))
         # Allow Function('f', real=True)
         # and/or Function(Symbol('f', real=True))
         assumptions, kwargs = _filter_assumptions(kwargs)
@@ -958,13 +1233,21 @@ class UndefinedFunction(FunctionClass):
         # You can add other attributes, although they do have to be hashable
         # (but seriously, if you want to add anything other than assumptions,
         # just subclass Function)
+        if 'nargs' in kwargs:
+            kwargs['nargs'] = _canonical_nargs(kwargs['nargs'])
         __dict__.update(kwargs)
         # add back the sanitized assumptions without the is_ prefix
         kwargs.update(assumptions)
-        # Save these for __eq__
-        __dict__.update({'_kwargs': kwargs})
-        # do this for pickling
-        __dict__['__module__'] = None
+        # Keep the original keyword values for reconstruction.
+        __dict__['_kwargs'] = kwargs
+        __dict__['_identity_kwargs'] = (
+            _function_metadata_key(kwargs) if is_factory else _empty_function_metadata)
+        __dict__['_is_factory'] = is_factory
+        __dict__['_metadata_sort_key'] = (
+            (_get_comparison_key((mcl, __dict__['_identity_kwargs'])),)
+            if is_factory and (kwargs or mcl is not UndefinedFunction) else ())
+        if is_factory:
+            __dict__['__module__'] = None
         obj = super().__new__(mcl, name, bases, __dict__)  # type: ignore
         obj.name = name
         obj._sage_ = _undef_sage_helper
@@ -973,15 +1256,22 @@ class UndefinedFunction(FunctionClass):
     def __instancecheck__(cls, instance):
         return cls in type(instance).__mro__
 
-    _kwargs: dict[str, bool | None] = {}
+    _kwargs: dict[str, Any] = {}
+    _is_factory: bool = False
+    _identity_kwargs: frozenset[tuple[str, Any]] = _empty_function_metadata
+    _metadata_sort_key: tuple = ()
 
     def __hash__(self):
-        return hash((self.class_key(), frozenset(self._kwargs.items())))
+        if not self._is_factory:
+            return type.__hash__(self)
+        return hash((self.class_key(), self._identity_kwargs))
 
     def __eq__(self, other):
-        return (isinstance(other, self.__class__) and
+        if self is other:
+            return True
+        return (self._is_factory and type(self) is type(other) and other._is_factory and
             self.class_key() == other.class_key() and
-            self._kwargs == other._kwargs)
+            self._identity_kwargs == other._identity_kwargs)
 
     def __ne__(self, other):
         return not self == other
@@ -991,12 +1281,57 @@ class UndefinedFunction(FunctionClass):
         return False
 
 
+def _is_uninterpreted_function(cls):
+    """Recognize functions without user-supplied evaluation behavior."""
+    if type(cls) is UndefinedFunction:
+        return (cls._is_factory
+                and not (cls._kwargs.keys() - _assume_defined - {'nargs'})
+                and not _get_postprocessors_for_type(cls))
+    if type(cls) is not FunctionClass or not issubclass(cls, Function):
+        return False
+    return (not _has_class_behavior(cls, Function)
+            and not _get_postprocessors_for_type(cls))
+
+
+def _is_ordinary_symbol(value):
+    """Recognize exact Symbol and Dummy instances."""
+    cls = type(value)
+    return cls is Symbol or cls is Dummy
+
+
+@cacheit
+def _has_standard_atom_hooks(cls_key):
+    """Recognize atoms whose hooks preserve an ordinary bound symbol."""
+    cls = cls_key.value
+    if type(cls) is not type and type(cls) is not Singleton:
+        return False
+    modules = (Atom.__module__, AtomicExpr.__module__, Number.__module__,
+               Symbol.__module__, 'sympy.logic.boolalg')
+    # Custom operators can inspect bound names through rebuilt parents.
+    if _has_class_behavior(cls, AtomicExpr, modules):
+        return False
+    methods = (
+        ('doit', Atom.doit),
+        ('_subs', Basic._subs),
+        ('xreplace', Atom.xreplace),
+        ('_xreplace', Basic._xreplace),
+    )
+    substitute = inspect.getattr_static(cls, '_eval_subs')
+    return (all(inspect.getattr_static(cls, name) is method for name, method in methods)
+            and any(substitute is method for method in (
+                Basic._eval_subs, Symbol._eval_subs, Number._eval_subs,
+                Infinity._eval_subs, NegativeInfinity._eval_subs)))
+
+
 # Using copyreg is the only way to make a dynamically generated instance of a
 # metaclass picklable without using a custom pickler. It is not possible to
 # define e.g. __reduce__ on the metaclass because obj.__reduce__ will retrieve
 # the __reduce__ method for reducing instances of the type rather than for the
 # type itself.
 def _reduce_undef(f):
+    if not f._is_factory:
+        # Class declarations retain Python's module-qualified identity.
+        return f.__qualname__
     return (_rebuild_undef, (f.name, f._kwargs))
 
 def _rebuild_undef(name, kwargs):
@@ -1829,7 +2164,7 @@ class Derivative(Expr):
                 if not vi.is_Symbol}
             wrt = {syms.get(vi, vi) for vi in self._wrt_variables}
             forbidden = args[0].xreplace(syms).free_symbols & wrt
-            nfree = new.xreplace(syms).free_symbols
+            nfree = (new.xreplace(syms) if syms else new).free_symbols
             ofree = old.xreplace(syms).free_symbols
             if (nfree - ofree) & forbidden:
                 return Subs(self, old, new)
@@ -2321,17 +2656,26 @@ class Subs(Expr):
     >>> a + b
     2*Subs(x, x, 0)
 
-    This can lead to unexpected consequences when using methods
-    like `has` that are cached:
+    Structural queries such as ``has`` inspect the stored arguments,
+    even when requests compare equal:
 
     >>> s = Subs(x, x, 0)
     >>> s.has(x), s.has(y)
     (True, False)
     >>> ss = s.subs(x, y)
     >>> ss.has(x), ss.has(y)
-    (True, False)
+    (False, True)
     >>> s, ss
     (Subs(x, x, 0), Subs(y, y, 0))
+
+    Sequences of replacements and compound targets retain their ordered
+    arguments for comparison. Equal evaluated values alone do not make
+    substitution programs interchangeable. When evaluating derivatives,
+    function replacements precede expression replacements.
+
+    Point identity includes assumptions and function metadata. Targets with
+    assumptions, noncommutative points, and expressions with evaluators also
+    retain the original arguments.
     """
     def __new__(cls, expr, variables, point, **assumptions):
         if not is_sequence(variables, Tuple):
@@ -2354,80 +2698,68 @@ class Subs(Expr):
         if not point:
             return sympify(expr)
 
-        # denest
-        if isinstance(expr, Subs):
+        # Denest ordinary Subs without bypassing subclass evaluators.
+        if cls is Subs and type(expr) is Subs:
             variables = expr.variables + variables
             point = expr.point + point
             expr = expr.expr
         else:
             expr = sympify(expr)
 
-        # use symbols with names equal to the point value (with prepended _)
-        # to give a variable-independent expression
-        pre = "_"
-        pts = sorted(set(point), key=default_sort_key)
-        from sympy.printing.str import StrPrinter
-        class CustomStrPrinter(StrPrinter):
-            def _print_Dummy(self, expr):
-                return str(expr) + str(expr.dummy_index)
-        def mystr(expr, **settings):
-            p = CustomStrPrinter(settings)
-            return p.doprint(expr)
-        while 1:
-            s_pts = {p: Symbol(pre + mystr(p)) for p in pts}
-            reps = [(v, s_pts[p])
-                for v, p in zip(variables, point)]
-            # if any underscore-prepended symbol is already a free symbol
-            # and is a variable with a different point value, then there
-            # is a clash, e.g. _0 clashes in Subs(_0 + _1, (_0, _1), (1, 0))
-            # because the new symbol that would be created is _1 but _1
-            # is already mapped to 0 so __0 and __1 are used for the new
-            # symbols
-            if any(r in expr.free_symbols and
-                   r in variables and
-                   Symbol(pre + mystr(point[variables.index(r)])) != r
-                   for _, r in reps):
-                pre += "_"
-                continue
-            break
+        return Expr.__new__(cls, expr, Tuple(*variables), point)
 
-        obj = Expr.__new__(cls, expr, Tuple(*variables), point)
-        obj._expr = expr.xreplace(dict(reps))
-        return obj
+    @staticmethod
+    def _xreplace_for_comparison(expr, rule):
+        """Normalize identity independently of evaluation settings."""
+        if (not global_parameters.evaluate or not global_parameters.distribute
+                or global_parameters.exp_is_pow):
+            with evaluate(True), distribute(True), _exp_is_pow(False):
+                return expr.xreplace(rule)
+        return expr.xreplace(rule)
 
     def _eval_is_commutative(self):
         return self.expr.is_commutative
+
+    def _ordered_indices(self):
+        """Use the evaluator's function-first order for derivatives."""
+        indices = range(len(self.variables))
+        if isinstance(self.expr, Derivative):
+            functions, expressions = sift(indices,
+                lambda i: isinstance(self.variables[i], FunctionClass), binary=True)
+            return functions + expressions
+        return indices
 
     def doit(self, **hints):
         e, v, p = self.args
 
         # remove self mappings
-        for i, (vi, pi) in enumerate(zip(v, p)):
-            if vi == pi:
-                v = v[:i] + v[i + 1:]
-                p = p[:i] + p[i + 1:]
-        if not v:
-            return self.expr
+        replacements = [(vi, pi) for vi, pi in zip(v, p) if vi != pi]
+        if not replacements:
+            if hints.get('deep', True) and isinstance(e, Basic):
+                return e.doit(**hints)
+            return e
 
         if isinstance(e, Derivative):
             # apply functions first, e.g. f -> cos
             undone = []
-            for i, vi in enumerate(v):
+            for vi, pi in replacements:
                 if isinstance(vi, FunctionClass):
-                    e = e.subs(vi, p[i])
+                    e = e.subs(vi, pi)
                 else:
-                    undone.append((vi, p[i]))
+                    undone.append((vi, pi))
             if not isinstance(e, Derivative):
+                if e == self:
+                    return self
                 e = e.doit()
             if isinstance(e, Derivative):
-                # do Subs that aren't related to differentiation
+                # Apply substitutions that do not affect differentiation first.
                 undone2 = []
                 D = Dummy()
                 arg = e.args[0]
                 for vi, pi in undone:
-                    if D not in e.xreplace({vi: D}).free_symbols:
-                        if arg.has(vi):
-                            e = e.subs(vi, pi)
+                    if (D not in e.xreplace({vi: D}).free_symbols and
+                            arg._has(iterargs, vi)):
+                        e = e.subs(vi, pi)
                     else:
                         undone2.append((vi, pi))
                 undone = undone2
@@ -2442,6 +2774,9 @@ class Subs(Expr):
                     elif D in expr.subs(vi, D).free_symbols:
                         expr = expr.diff((vi, ci))
                     else:
+                        # Symbolic orders are free parameters.
+                        if not ci.is_Integer:
+                            ci = ci.subs(undone)
                         wrt.append((vi, ci))
                 # inject remaining subs
                 rv = expr.subs(undone)
@@ -2451,15 +2786,23 @@ class Subs(Expr):
             else:
                 # inject remaining subs
                 rv = e.subs(undone)
+
+            # Derivative evaluation can reorder an unchanged deferred request.
+            if (type(self) is Subs and type(rv) is Subs and rv.expr == self.expr
+                    and Counter(zip(rv.variables, rv.point)) == Counter(zip(v, p))):
+                return self
         else:
-            rv = e.doit(**hints).subs(list(zip(v, p)))
+            rv = e.doit(**hints).subs(replacements)
 
         if hints.get('deep', True) and rv != self:
             rv = rv.doit(**hints)
         return rv
 
     def evalf(self, prec=None, **options):
-        return self.doit().evalf(prec, **options)
+        value = self.doit()
+        if value == self:
+            return super().evalf(prec, **options)
+        return value.evalf(prec, **options)
 
     n = evalf  # type:ignore
 
@@ -2482,8 +2825,14 @@ class Subs(Expr):
 
     @property
     def free_symbols(self):
-        return (self.expr.free_symbols - set(self.variables) |
-            set(self.point.free_symbols))
+        free = set(self.expr.free_symbols)
+        # Later targets can bind symbols introduced by earlier points.
+        for i in self._ordered_indices():
+            variable, point = self.variables[i], self.point[i]
+            free.discard(variable)
+            if not _is_class(point):
+                free.update(point.free_symbols)
+        return free
 
     @property
     def expr_free_symbols(self):
@@ -2498,52 +2847,292 @@ class Subs(Expr):
             return (self.expr.expr_free_symbols - set(self.variables) |
                     set(self.point.expr_free_symbols))
 
-    def __eq__(self, other):
-        if not isinstance(other, Subs):
-            return False
-        return self._hashable_content() == other._hashable_content()
-
-    def __ne__(self, other):
-        return not(self == other)
-
-    def __hash__(self):
-        return super().__hash__()
-
     def _hashable_content(self):
-        return (self._expr.xreplace(self.canonical_variables),
-            ) + tuple(ordered([(v, p) for v, p in
-            zip(self.variables, self.point) if not self.expr.has(v)]))
+        return self._comparison_key
+
+    @cacheit_by_identity
+    def sort_key(self, order=None):
+        key = default_sort_key(self._comparison_key, order=order)
+        return self.class_key(), key[1], key[2], key[3]
+
+    @cached_property
+    def _comparison_key(self):
+        """Retain literal arguments unless a single binding can be renamed."""
+        from .power import Pow
+        from sympy.integrals.integrals import Integral
+        # False preserves literal arguments; True marks a normalized binding.
+        key = (False,) + super()._hashable_content()
+        if type(self) is not Subs:
+            return key
+
+        variables = self.variables.args
+        point = self.point.args
+
+        # Normalize one active ordinary symbol only when renaming is reversible.
+        # Order, assumptions, nested scopes and evaluators can matter.
+        if (len(variables) != 1 or not _is_ordinary_symbol(variables[0])
+                or variables[0].assumptions0 != {'commutative': True}
+                or getattr(point[0], 'is_commutative', None) is not True):
+            return key
+        free = self.expr.free_symbols
+        if variables[0] not in free:
+            return key
+        derivative_counts = []
+        for node in iterargs(self.expr):
+            if _is_class(node):
+                continue
+            if getattr(node, 'bound_symbols', ()):
+                return key
+            if isinstance(node, Function):
+                if not _is_uninterpreted_function(node.func):
+                    return key
+            elif isinstance(node, Atom):
+                cls = type(node)
+                if node.args or not _has_standard_atom_hooks(_ClassIdentity(cls)):
+                    return key
+            elif not any(type(node) is cls for cls in (
+                    Basic, Expr, Add, Mul, Pow, Derivative, Tuple, Dict, Integral)):
+                return key
+            if _get_postprocessors_for_type(type(node)):
+                return key
+            if type(node) is Derivative:
+                derivative_counts.extend(node.variable_count)
+
+        # Symbolic-order derivatives can retain their differentiation variables.
+        if any(not count.is_Integer and isinstance(variable, Basic)
+               and variables[0] in variable.free_symbols
+               for variable, count in derivative_counts):
+            return key
+
+        normalization_symbol = next(numbered_symbols('_', exclude=free - set(variables)))
+        normalized = self._xreplace_for_comparison(
+            self.expr, {variables[0]: normalization_symbol})
+        if normalized.free_symbols != free - set(variables) | {normalization_symbol}:
+            return key
+
+        # Compare content without running constructors; only commutative
+        # operand order is irrelevant to the structure.
+        def structure(node, restore=False):
+            if restore and issubclass(type(node), Symbol) and node == normalization_symbol:
+                node = variables[0]
+            if type(node) is tuple:
+                return tuple, tuple(structure(arg, restore) for arg in node)
+            if type(node) is frozenset:
+                return frozenset, frozenset(structure(arg, restore) for arg in node)
+            if not issubclass(type(node), Basic) or not node.args:
+                return type(node), node
+            if type(node) is Mul:
+                commutative, noncommutative = node.args_cnc()
+                return (Mul,
+                    frozenset(Counter(structure(arg, restore) for arg in commutative).items()),
+                    tuple(structure(arg, restore) for arg in noncommutative))
+            content = tuple(structure(arg, restore) for arg in node._hashable_content())
+            if type(node) is Add:
+                content = frozenset(Counter(content).items())
+            return type(node), content
+
+        if structure(self.expr) != structure(normalized, restore=True):
+            return key
+        return True, normalized, self.point
 
     def _eval_subs(self, old, new):
-        # Subs doit will do the variables in order; the semantics
-        # of subs for Subs is have the following invariant for
-        # Subs object foo:
-        #    foo.doit().subs(reps) == foo.subs(reps).doit()
+        old_is_class = _is_class(old)
+
+        def subs(arg):
+            if _is_class(arg):
+                return new if old_is_class and arg == old else arg
+            return arg._subs(old, new)
+
+        def needs_mask(variables):
+            return (not old_is_class and old._has(iterargs, *variables)
+                    or not _is_class(new) and new._has(iterargs, Dummy, *variables))
+
         pt = list(self.point)
-        if old in self.variables:
-            if _atomic(new) == {new} and not any(
-                    i.has(new) for i in self.args):
-                # the substitution is neutral
-                return self.xreplace({old: new})
+        old_index = next((i for i, variable in enumerate(self.variables)
+                         if _is_class(variable) == old_is_class and variable == old), None)
+        if old_index is not None:
+            # A neutral rename must preserve evaluation, domain, and free points.
+            if (_is_ordinary_symbol(old) and _is_ordinary_symbol(new)
+                    and self._comparison_key[0]
+                    and old.assumptions0 == new.assumptions0
+                    and old not in self.free_symbols
+                    and not any(i._has(iterargs, new) for i in self.args)):
+                return self.func(self.expr.xreplace({old: new}), new, subs(self.point))
             # any occurrence of old before this point will get
             # handled by replacements from here on
-            i = self.variables.index(old)
-            for j in range(i, len(self.variables)):
-                pt[j] = pt[j]._subs(old, new)
+            indices = list(self._ordered_indices())
+            i = indices.index(old_index)
+            for j in indices[i:]:
+                pt[j] = subs(pt[j])
             return self.func(self.expr, self.variables, pt)
-        v = [i._subs(old, new) for i in self.variables]
+        v = [subs(i) for i in self.variables]
         if v != list(self.variables):
             return self.func(self.expr, self.variables + (old,), pt + [new])
-        expr = self.expr._subs(old, new)
-        pt = [i._subs(old, new) for i in self.point]
+        active = []
+        if (all(_is_ordinary_symbol(variable) for variable in v)
+                and (len(v) == 1 or type(self) is Subs and not has_dups(v))):
+            follow_points = len(v) > 1 and needs_mask(v)
+            free = set() if _is_class(self.expr) else set(self.expr.free_symbols)
+            for i, variable in enumerate(v):
+                if variable in free:
+                    active.append((i, variable))
+                    free.discard(variable)
+                    # An earlier point can introduce a later binding.
+                    if follow_points and i + 1 < len(v) and not _is_class(pt[i]):
+                        free.update(pt[i].free_symbols)
+        if (len(v) == 1 and active and not old_is_class
+                and v[0] in old.free_symbols):
+            expr = self.expr
+        elif (active and (
+                needs_mask([variable for _, variable in active])
+                or isinstance(old, FunctionClass) and callable(new)
+                and not _is_uninterpreted_function(new) and self._comparison_key[0])):
+            if (_is_class(new) and isinstance(new, FunctionClass)
+                    and type(self) is Subs and old_is_class
+                    and isinstance(old, FunctionClass) and self._comparison_key[0]
+                    and old.is_Function and new.is_Function
+                    and any(not _is_class(node) and isinstance(node, Function)
+                            and _can_substitute_function(node, old, new)
+                            for node in iterargs(self.expr))):
+                # Apply definitions to public arguments in the evaluator's order.
+                if isinstance(self.expr, Derivative):
+                    return self.func(subs(self.expr), v, [subs(point) for point in pt])
+                return self.expr.subs(list(zip(v, pt))).subs(old, new)
+            if _is_ordinary_symbol(old) and old not in free:
+                def unchanged(arg):
+                    from .power import Pow
+                    for node in iterargs(arg):
+                        if _is_class(node):
+                            continue
+                        # Static inspection requires trusted class identity and hashing.
+                        meta = type(type(node))
+                        if (meta is not type and meta is not Singleton
+                                and meta is not FunctionClass and meta is not UndefinedFunction):
+                            return False
+                        if (isinstance(node, Number)
+                                and not _has_standard_atom_hooks(_ClassIdentity(type(node)))):
+                            return False
+                        if (not isinstance(node, Basic)
+                                or _get_type_attribute(node, '__getattribute__') is not object.__getattribute__
+                                or _get_type_attribute(node, '__class__') is not object.__dict__['__class__']
+                                or inspect.getattr_static(node, '_subs', None) is not Basic._subs):
+                            return False
+                        if node.__class__ == old.__class__ and node == old:
+                            return False
+                        hook = inspect.getattr_static(node, '_eval_subs', None)
+                        if type(node) is Pow and hook is Pow._eval_subs:
+                            from sympy.calculus.accumulationbounds import AccumBounds
+                            # Power substitution can act on an interval or a base alias.
+                            if isinstance(node.exp, AccumBounds) or old == node.base:
+                                return False
+                        elif not (any(hook is method for method in (
+                                    Basic._eval_subs, Function._eval_subs, Symbol._eval_subs,
+                                    Add._eval_subs, Mul._eval_subs))
+                                or isinstance(node, Number)
+                                and any(hook is method for method in (
+                                    Number._eval_subs, Infinity._eval_subs, NegativeInfinity._eval_subs))):
+                            return False
+                    return True
+
+                # Avoid rebuilding an unchanged expression; custom hooks can
+                # react even to symbols absent from their stored arguments.
+                if unchanged(self.expr):
+                    if len(v) == 1:
+                        points = [subs(point) for point in pt]
+                        if all(a is b for a, b in zip(points, pt)):
+                            return self
+                        return self.func(self.expr, v, points)
+                    if all(unchanged(point) for point in pt):
+                        return self
+            # An ordered request preserves scope without introducing symbols
+            # that opaque constructors or postprocessors could evaluate.
+            if (type(self) is Subs and len(v) == 1
+                    and _is_ordinary_symbol(old)
+                    and (_get_postprocessors_for_type(Dummy)
+                         or old in self.free_symbols and not self._comparison_key[0])):
+                return Subs(self, old, new)
+            if len(v) > 1:
+                # An active symbol replacement cannot introduce an inactive target.
+                if (_is_ordinary_symbol(old) and old in free
+                        and _is_ordinary_symbol(new)
+                        and any(new == variable for _, variable in active)):
+                    return Subs(self, old, new)
+
+                def can_rename(variable, *args, point=S.One):
+                    # The extra occurrence makes the proof inspect all hooks.
+                    request = Subs(Tuple(*args, variable, sympify=False), variable, point)
+                    return request._comparison_key[0]
+
+                replacement = new.expr if type(new) is Lambda else new
+                safe = all(
+                    can_rename(variable, self.expr, *pt, old, replacement, point=self.point[i])
+                    for i, variable in active)
+                if safe and type(new) is Lambda:
+                    safe = (not _get_postprocessors_for_type(Lambda)
+                            and all(can_rename(variable, replacement) for variable in new.variables))
+                if not safe:
+                    # All active bindings can finish before inserting a free replacement.
+                    if (len(active) == len(v) and _is_ordinary_symbol(old)
+                            and old in self.free_symbols):
+                        return Subs(self, old, new)
+                    return self.func(subs(self.expr), v, [subs(point) for point in pt])
+            if len(v) > 1 and _get_postprocessors_for_type(Dummy):
+                # The proof permits ordinary symbols without invoking Dummy hooks.
+                exclude = {node for arg in (self.expr, *v, *pt, old, new)
+                           for node in iterargs(arg) if isinstance(node, Symbol)}
+                symbols = numbered_symbols('_', exclude=exclude)
+                renamed = {variable: next(symbols) for _, variable in active}
+            else:
+                renamed = {variable: Dummy(variable.name, **variable.assumptions0)
+                           for _, variable in active}
+
+            def mask(arg, start):
+                if _is_class(arg):
+                    return arg
+                for i, variable in active:
+                    if i < start:
+                        continue
+                    rule = {variable: renamed[variable]}
+                    # Locally bound occurrences belong to their own node.
+                    rule.update((node, node) for node in iterargs(arg)
+                        if not _is_class(node)
+                        and variable in getattr(node, 'bound_symbols', ())
+                        and variable not in node.free_symbols)
+                    with evaluate(False):
+                        arg = arg.xreplace(rule)
+                return arg
+
+            masked = mask(self.expr, 0)
+            # Earlier points are within the scope of later symbol bindings.
+            masked_points = [mask(point, i + 1) for i, point in enumerate(pt)]
+            expr = subs(masked)
+            pt = [subs(point) for point in masked_points]
+            if len(v) == 1 and expr == masked:
+                return self.func(self.expr, v, pt)
+            if expr == masked and pt == masked_points:
+                return self
+            v = [renamed.get(variable, variable) for variable in v]
+            return self.func(expr, v, pt)
+        else:
+            expr = subs(self.expr)
+        pt = [subs(i) for i in self.point]
         return self.func(expr, v, pt)
 
     def _eval_derivative(self, s):
+        # Resolve ordered substitutions before applying the chain rule.
+        value = self.doit()
+        if value != self:
+            return diff(value, s)
+        if any(not _is_ordinary_symbol(v) for v in self.variables):
+            return None
+
         # Apply the chain rule of the derivative on the substitution variables:
         f = self.expr
         vp = V, P = self.variables, self.point
-        val = Add.fromiter(p.diff(s)*Subs(f.diff(v), *vp).doit()
-            for v, p in zip(V, P))
+        point_derivatives = ((v, p.diff(s)) for v, p in zip(V, P))
+        # A zero coefficient must not evaluate a potentially singular partial.
+        val = Add.fromiter(dp*Subs(f.diff(v), *vp).doit()
+            for v, dp in point_derivatives if dp != 0)
 
         # these are all the free symbols in the expr
         efree = f.free_symbols
@@ -2566,6 +3155,9 @@ class Subs(Expr):
         return val
 
     def _eval_nseries(self, x, n, logx, cdir=0):
+        value = self.doit()
+        if value != self:
+            return value.nseries(x, n=n, logx=logx, cdir=cdir)
         if x in self.point:
             # x is the variable being substituted into
             apos = self.point.index(x)
@@ -2581,16 +3173,10 @@ class Subs(Expr):
         return rv
 
     def _eval_as_leading_term(self, x, logx, cdir):
-        if x in self.point:
-            ipos = self.point.index(x)
-            xvar = self.variables[ipos]
-            return self.expr.as_leading_term(xvar)
-        if x in self.variables:
-            # if `x` is a dummy variable, it means it won't exist after the
-            # substitution has been performed:
-            return self
-        # The variable is independent of the substitution:
-        return self.expr.as_leading_term(x)
+        value = self.doit()
+        if value != self:
+            return value.as_leading_term(x, logx=logx, cdir=cdir)
+        return super()._eval_as_leading_term(x, logx=logx, cdir=cdir)
 
 
 def diff(f, *symbols, **kwargs):
