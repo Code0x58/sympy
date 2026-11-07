@@ -341,7 +341,9 @@ class Sum(AddWithLimits, ExprWithIntLimits):
         integer = ((a.is_integer and b in (S.Infinity, S.NegativeInfinity)) or
                    (b.is_integer and a in (S.Infinity, S.NegativeInfinity)))
         dummy = _dummy_with_inherited_properties_concrete(limit, assume_integer=bool(integer))
-        if dummy and not x.has(index):
+        # Nested bindings of the index must keep their own assumptions.
+        if dummy and not x.has(index) and not f.find(
+                lambda expr: index in getattr(expr, 'bound_symbols', ())):
             df = Derivative(f.xreplace({index: dummy}), x, evaluate=True)
             df = df.xreplace({dummy: index})
         else:

@@ -5,7 +5,7 @@ from sympy.concrete.expr_with_intlimits import ReorderError
 from sympy.concrete.products import (Product, product)
 from sympy.concrete.summations import (Sum, summation, telescopic,
      eval_sum_residue, _dummy_with_inherited_properties_concrete)
-from sympy.core.function import (Derivative, Function)
+from sympy.core.function import (Derivative, Function, Subs)
 from sympy.core import (Catalan, EulerGamma)
 from sympy.core.facts import InconsistentAssumptions
 from sympy.core.mod import Mod
@@ -707,6 +707,14 @@ def test_diff():
     assert Sum(c*(x*y)**k, (k, 0, 2)).diff(x).doit().subs(x, 0) == c*y
     assert Sum(x*(x*(x + 1))**k, (k, 0, 1)).diff(x).doit().subs(x, -1) == 2
     assert Sum(x*(x*(x + 1))**k, (k, 0, oo)).diff(x).doit().subs(x, -1) == 2
+
+
+def test_diff_nested_bound_index():
+    x = Symbol('x', real=True)
+    expr = Sum(k*Integral(Abs(k), (k, 0, x)), (k, 1, 2))
+    assert expr.diff(x).doit().subs(x, -1) == 3
+    expr = Sum(k*Subs(Abs(k), k, x), (k, 1, 2))
+    assert expr.diff(x).doit().subs(x, -1) == -3
 
 
 def test_hypersum():
