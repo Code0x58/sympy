@@ -2470,12 +2470,10 @@ class Subs(Expr):
         e, v, p = self.args
 
         # remove self mappings
-        for i, (vi, pi) in enumerate(zip(v, p)):
-            if vi == pi:
-                v = v[:i] + v[i + 1:]
-                p = p[:i] + p[i + 1:]
-        if not v:
+        reps = [(vi, pi) for vi, pi in zip(v, p) if vi != pi]
+        if not reps:
             return self.expr
+        v, p = zip(*reps)
 
         if isinstance(e, Derivative):
             # apply functions first, e.g. f -> cos
@@ -2590,12 +2588,11 @@ class Subs(Expr):
 
     @staticmethod
     @cacheit
-    def _dependent_points(variables, points):
+    def _comparison_points(variables, points):
         if all(v.is_Symbol for v in variables) and not points.free_symbols.intersection(variables):
-            return False
-        probe = Dummy()
-        return any(v != p and any(q.subs(v, probe) != q for q in points)
-                   for v, p in zip(variables, points))
+            return points
+        return Tuple(*(p.subs(list(zip(variables[i + 1:], points[i + 1:])))
+                       for i, p in enumerate(points)))
 
     def _hashable_content(self):
         unused = tuple(ordered((v, p) for v, p in zip(self.variables, self.point)
@@ -2603,15 +2600,15 @@ class Subs(Expr):
         # Equal evaluation points do not identify partial differentiation variables.
         if (isinstance(self.expr, Derivative) and has_dups(self.point)
                 and self._independent_variables(self.variables)):
-            if self._dependent_points(self.variables, self.point):
-                # Dependent points must retain the sequential substitution order.
-                return (2, self.expr, self.variables, self.point) + unused
             variables = list(dict.fromkeys(v for v in preorder_traversal(self.expr)
                                           if v in self.variables))
             variables.extend(ordered(v for v in self.variables if v not in variables))
             coordinates = {v: Dummy(commutative=v.is_commutative)
                            for v in variables if not v.is_Symbol}
             expr = self.expr.xreplace(coordinates)
+            # Algebraic substitution can affect more than exact coordinate nodes.
+            if any(expr.subs(v, d) != expr for v, d in coordinates.items()):
+                return (2, self.expr, self.variables, self.point) + unused
             signature = tuple(coordinates.get(v, v) for v in variables)
             canonical = Lambda(signature, expr).canonical_variables
             canonical = {v: Symbol(d.name, commutative=v.is_commutative)
@@ -2619,7 +2616,9 @@ class Subs(Expr):
             expr = expr.xreplace(canonical)
             if isinstance(expr, Derivative):
                 expr = expr.canonical
-            points = Tuple(*(self.point[self.variables.index(v)] for v in variables))
+            # Compose the points in their sequential substitution order.
+            points = self._comparison_points(self.variables, self.point)
+            points = Tuple(*(points[self.variables.index(v)] for v in variables))
             return (True, expr, Tuple(*canonical.values()), points) + unused
         return (False, self._expr.xreplace(self.canonical_variables)) + unused
 

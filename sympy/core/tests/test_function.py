@@ -516,6 +516,7 @@ def test_Subs():
     assert Subs(x, x, 1).subs(x, y).has(y)
     # self mapping var/point
     assert Subs(Derivative(f(x), (x, 2)), x, x).doit() == f(x).diff(x, x)
+    assert Subs(x + y + z, (x, y, z), (x, y, x)).doit() == 2*x + y
     assert Subs(x, x, 0).has(x)  # it's a structural answer
     assert not Subs(x, x, 0).free_symbols
     assert Subs(Subs(x + y, x, 2), y, 1) == Subs(x + y, (x, y), (2, 1))
@@ -612,6 +613,16 @@ def test_Subs_dependent_partial_points():
     second = Subs(derivative, (z, y, x), (x, 1, 1))
     difference = (first - second).subs(f, Lambda((x, y, z), x**2*z)).doit()
     assert difference.subs(x, 2) == 2
+    commuted = Subs(derivative, (y, x, z), (1, 1, x))
+    assert first == commuted
+
+
+def test_Subs_compound_partial_points():
+    first = Subs(Derivative(f(x, y**2, z, y**4), x),
+                 (x, y**2, z), (y**4, y**4, y**8))
+    second = Subs(Derivative(f(x, t, z, y**4), x),
+                  (x, t, z), (y**8, y**4, y**8))
+    assert first != second
 
 
 def test_higher_derivative_formal_partials_coincident_arguments():
