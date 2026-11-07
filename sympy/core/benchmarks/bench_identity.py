@@ -906,3 +906,25 @@ class TimeBindingQueries:
 
     def time_has_free(self):
         self.source._has(iterfreeargs, self.missing)
+
+
+class TimeNumericSubstitution:
+    params = [['integer', 'rational', 'float', 'infinity', 'negative_infinity'],
+              ['symbol', 'function', 'class']]
+    param_names = ['kind', 'pattern']
+
+    def setup(self, kind, pattern):
+        self.value = {
+            'integer': S(2), 'rational': S.Half, 'float': Float('1.25'),
+            'infinity': S.Infinity, 'negative_infinity': S.NegativeInfinity,
+        }[kind]
+        self.old = {
+            'symbol': Symbol('numeric_old'),
+            'function': Function('numeric_old'), 'class': Basic,
+        }[pattern]
+        self.new = Symbol('numeric_new')
+        expected = None if kind in ('infinity', 'negative_infinity') else self.value
+        assert self.value._eval_subs(self.old, self.new) is expected
+
+    def time_eval_subs(self, kind, pattern):
+        self.value._eval_subs(self.old, self.new)

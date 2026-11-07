@@ -2936,17 +2936,21 @@ class Subs(Expr):
         return True, normalized, self.point
 
     def _eval_subs(self, old, new):
+        old_is_class = _is_class(old)
+
         def subs(arg):
             if _is_class(arg):
-                return new if arg == old else arg
+                return new if old_is_class and arg == old else arg
             return arg._subs(old, new)
 
         def needs_mask(variables):
-            return (not _is_class(old) and old._has(iterargs, *variables)
+            return (not old_is_class and old._has(iterargs, *variables)
                     or not _is_class(new) and new._has(iterargs, Dummy, *variables))
 
         pt = list(self.point)
-        if old in self.variables:
+        old_index = next((i for i, variable in enumerate(self.variables)
+                         if _is_class(variable) == old_is_class and variable == old), None)
+        if old_index is not None:
             # A neutral rename must preserve evaluation, domain, and free points.
             if (_is_ordinary_symbol(old) and _is_ordinary_symbol(new)
                     and self._comparison_key[0]
@@ -2957,7 +2961,7 @@ class Subs(Expr):
             # any occurrence of old before this point will get
             # handled by replacements from here on
             indices = list(self._ordered_indices())
-            i = indices.index(self.variables.index(old))
+            i = indices.index(old_index)
             for j in indices[i:]:
                 pt[j] = subs(pt[j])
             return self.func(self.expr, self.variables, pt)
@@ -2976,7 +2980,7 @@ class Subs(Expr):
                     # An earlier point can introduce a later binding.
                     if follow_points and i + 1 < len(v) and not _is_class(pt[i]):
                         free.update(pt[i].free_symbols)
-        if (len(v) == 1 and active and not _is_class(old)
+        if (len(v) == 1 and active and not old_is_class
                 and v[0] in old.free_symbols):
             expr = self.expr
         elif (active and (
@@ -2984,7 +2988,7 @@ class Subs(Expr):
                 or isinstance(old, FunctionClass) and callable(new)
                 and not _is_uninterpreted_function(new) and self._comparison_key[0])):
             if (_is_class(new) and isinstance(new, FunctionClass)
-                    and type(self) is Subs and _is_class(old)
+                    and type(self) is Subs and old_is_class
                     and isinstance(old, FunctionClass) and self._comparison_key[0]
                     and old.is_Function and new.is_Function
                     and any(not _is_class(node) and isinstance(node, Function)
@@ -2999,8 +3003,6 @@ class Subs(Expr):
                     from .power import Pow
                     for node in iterargs(arg):
                         if _is_class(node):
-                            if node == old:
-                                return False
                             continue
                         # Static inspection requires trusted class identity and hashing.
                         meta = type(type(node))

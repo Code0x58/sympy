@@ -54,6 +54,23 @@ def same_and_same_prec(a, b):
     return a == b and a._prec == b._prec
 
 
+@pytest.mark.parametrize('value', [S.Zero, S.One, -S.One, S(2), Rational(1, 2),
+                                 Float('1.25'), oo, -oo, nan, zoo, pi])
+def test_numeric_substitution_class_literals(value):
+    class ClassEquality(type):
+        def __eq__(cls, other):
+            if not isinstance(other, type):
+                raise ValueError('class equality expects a class')
+            return cls is other
+
+        __hash__ = type.__hash__
+
+    class Literal(Basic, metaclass=ClassEquality):
+        pass
+
+    assert value.subs(Literal, Symbol('replacement')) is value
+
+
 @pytest.mark.thread_unsafe(reason="mutates process-global division error state")
 def test_seterr():
     seterr(divide=True)

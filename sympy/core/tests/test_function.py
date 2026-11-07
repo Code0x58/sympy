@@ -3810,6 +3810,66 @@ def test_Subs_function_definition_preserves_symbol_names():
         assert result.has(x)
 
 
+@pytest.mark.parametrize('nested', [False, True])
+@XFAIL
+def test_Subs_name_sensitive_derivative_definition(nested):
+    class Named(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg.is_Symbol:
+                return arg**(2 if arg.name == 'x' else 3)
+            return arg**4
+
+    requests = []
+    for variable in (x, z):
+        body = Derivative(f(variable), variable)
+        requests.append(Subs(body + 1 if nested else body, variable, 1))
+    first, second = requests
+    assert first == second
+    expected = [2 + int(nested), 3 + int(nested)]
+    for request, value in zip(requests, expected):
+        clear_cache()
+        assert request.subs(f, Named).doit() == value
+    for ordered in (requests, requests[::-1]):
+        clear_cache()
+        assert [request.subs(f, Named).doit() for request in ordered] == (
+            expected if ordered is requests else expected[::-1])
+    assert (first + second).subs(f, Named).doit() == sum(expected)
+
+
+@pytest.mark.parametrize('placement', ['expression', 'point', 'variable', 'mixed'])
+def test_Subs_class_literal_substitution_domains(placement):
+    class ClassEquality(type):
+        def __eq__(cls, other):
+            if not isinstance(other, type):
+                raise ValueError('class equality expects a class')
+            return cls is other
+
+        __hash__ = type.__hash__
+
+    class Literal(Basic, metaclass=ClassEquality):
+        pass
+
+    sources = {
+        'expression': Subs(Basic(Literal, f(x)), x, 0),
+        'point': Subs(f(x), x, Literal),
+        'variable': Subs(f(x), Literal, g),
+        'mixed': Subs(f(x), (Literal, x), (g, 0)),
+    }
+    source = sources[placement]
+    for replacement in (z, x, Dummy()):
+        assert source.subs(y, replacement) == source
+    expected = {
+        'expression': Basic(y, f(0)),
+        'point': f(y),
+        'variable': f(x),
+        'mixed': f(0),
+    }
+    assert source.subs(Literal, y).doit() == expected[placement]
+    if placement in ('variable', 'mixed'):
+        assert source.subs(x, z).doit() == (f(z) if placement == 'variable' else f(0))
+
+
 @pytest.mark.parametrize('variable', [Symbol('_0'), Symbol('_1'), Symbol('_2')])
 @pytest.mark.parametrize('point', [0, 1, Symbol('_0'), x])
 def test_Subs_reserved_binding_names(variable, point):

@@ -11,7 +11,7 @@ from .containers import Tuple
 from .sympify import (SympifyError, _sympy_converter, sympify, _convert_numpy_types,
               _sympify, _is_numpy_instance)
 from .singleton import S, Singleton
-from .basic import Basic
+from .basic import Basic, _is_class
 from .expr import Expr, AtomicExpr
 from .evalf import pure_complex
 from .cache import cacheit, clear_cache
@@ -466,7 +466,7 @@ class Number(AtomicExpr):
         return Order(S.One, *symbols)
 
     def _eval_subs(self, old, new):
-        if old == -self:
+        if not _is_class(old) and old == -self:
             return -new
         return self  # there is no other possibility
 
@@ -3071,7 +3071,7 @@ class Infinity(Number, metaclass=Singleton):
         return r"\infty"
 
     def _eval_subs(self, old, new):
-        if self == old:
+        if not _is_class(old) and self == old:
             return new
 
     def _eval_evalf(self, prec=None):
@@ -3227,7 +3227,7 @@ class NegativeInfinity(Number, metaclass=Singleton):
         return r"-\infty"
 
     def _eval_subs(self, old, new):
-        if self == old:
+        if not _is_class(old) and self == old:
             return new
 
     def _eval_evalf(self, prec=None):
