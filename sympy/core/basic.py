@@ -79,7 +79,7 @@ def _get_type_attribute(value, name, default=None):
 
 def _has_builtin_equality(value, cls):
     """Recognize containers that inherit the built-in equality operation."""
-    return isinstance(value, cls) and (type(value) is cls
+    return issubclass(type(value), cls) and (type(value) is cls
         or _get_type_attribute(value, '__eq__') is cls.__eq__)
 
 
@@ -220,17 +220,21 @@ def _args_equal(left, right):
     for a, b in zip(left, right):
         if a is b:
             continue
-        if isinstance(a, Basic):
-            if not isinstance(b, Basic) or ((a.is_Number or b.is_Number)
+        if issubclass(type(a), Basic):
+            if not issubclass(type(b), Basic) or ((a.is_Number or b.is_Number)
                     and type(a) is not type(b)):
                 return False
-        elif isinstance(b, Basic) or _is_class(a) != _is_class(b):
+        elif issubclass(type(b), Basic):
             return False
+        elif _is_class(a) or _is_class(b):
+            if not (_is_class(a) and _is_class(b) and a == b):
+                return False
+            continue
         elif type(a) is tuple and type(b) is tuple:
             if not _args_equal(a, b):
                 return False
             continue
-        elif isinstance(a, (tuple, frozenset)) or isinstance(b, (tuple, frozenset)):
+        elif issubclass(type(a), (tuple, frozenset)) or issubclass(type(b), (tuple, frozenset)):
             container = _builtin_container_type(a)
             if container is not _builtin_container_type(b):
                 return False
@@ -1143,6 +1147,7 @@ class Basic(Printable):
             reps = {
                 v: Dummy(v.name, commutative=v.is_commutative)
                 for v in x.bound_symbols
+                if not _is_class(v)
             }
             restore.update({dummy: v for v, dummy in reps.items()})
 
@@ -1247,6 +1252,8 @@ class Basic(Printable):
 
         names = _free_symbol_names(self)
         for b in bound:
+            if _is_class(b):
+                continue
             d = next(dums)
             while d.name in names:
                 d = next(dums)
@@ -1692,7 +1699,7 @@ class Basic(Printable):
             args = list(self.args)
             for i, arg in enumerate(args):
                 if _is_class(arg):
-                    arg = new if arg == old else arg
+                    arg = new if _is_class(old) and arg == old else arg
                 else:
                     if not hasattr(arg, '_eval_subs'):
                         continue

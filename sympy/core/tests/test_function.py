@@ -3645,6 +3645,171 @@ def test_Subs_symbol_sensitive_function_definition(definition):
         assert source.subs(f, replacement).doit() == F(1)
 
 
+@pytest.mark.parametrize('derivative', [False, True])
+@pytest.mark.parametrize('variable', [x, z])
+@pytest.mark.parametrize('implementation', ['eval', 'constructor', 'factory'])
+@pytest.mark.parametrize('unhashable', [False, True])
+def test_Subs_function_definition_preserves_evaluator_arguments(
+        derivative, variable, implementation, unhashable):
+    calls = []
+    metaclass = (type('DefinitionMeta', (type(Function),), {'__hash__': None})
+                 if unhashable else type(Function))
+
+    def square(arg):
+        calls.append(arg)
+        if isinstance(arg, Dummy):
+            raise ValueError('unexpected dummy argument')
+        return arg**2
+
+    if implementation == 'eval':
+        class Square(Function, metaclass=metaclass):
+            @classmethod
+            def eval(cls, arg):
+                return square(arg)
+    elif implementation == 'constructor':
+        class Square(Function, metaclass=metaclass):
+            def __new__(cls, arg):
+                return square(sympify(arg))
+    else:
+        factory = (type('DefinitionFactory', (UndefinedFunction,), {'__hash__': None})
+                   if unhashable else UndefinedFunction)
+        Square = factory('Square', eval=classmethod(lambda cls, arg: square(arg)))
+
+    body = Derivative(f(variable), variable) if derivative else f(variable)
+    source = Subs(body, variable, 1)
+    result = source.subs(f, Square)
+    assert isinstance(hash(result), int)
+    assert result.free_symbols == set()
+    assert not result.has_free(variable)
+    assert not result.has_xfree({f})
+    assert result.as_dummy().doit() == (2 if derivative else 1)
+    assert result.doit() == (2 if derivative else 1)
+    assert calls and all(not isinstance(arg, Dummy) for arg in calls)
+    if derivative:
+        assert variable in calls
+
+
+def test_Subs_function_class_binding_queries():
+    for variables, points, expected in [(f, cos, cos(x)), ((f, x), (cos, 1), cos(1))]:
+        source = Subs(f(x), variables, points)
+        assert source.as_dummy().doit() == source.doit() == expected
+        assert source.free_symbols == expected.free_symbols
+        assert source.has_free(x) == (x in expected.free_symbols)
+        assert f not in source.canonical_variables
+        assert not source.has_free(f)
+        assert not source.has_xfree({f})
+        assert source.subs(g, sin) == source
+
+    class ClassEquality(type):
+        def __eq__(cls, other):
+            if not isinstance(other, type):
+                raise ValueError('class equality expects a class')
+            return cls is other
+
+        __hash__ = type.__hash__
+
+    literal = ClassEquality('Literal', (), {})
+    source = Subs(Basic(literal, x), x, 0)
+    assert source.has_free(literal)
+    assert source.has_xfree({literal})
+    assert Basic(literal, x).subs(x, y) == Basic(literal, y)
+
+    class OpaqueClass(type):
+        @property
+        def __class__(cls):
+            raise ValueError('instance class hook')
+
+        @property
+        def free_symbols(cls):
+            return set()
+
+    class Literal(metaclass=OpaqueClass):
+        args = ()
+
+    source = Subs(Basic(Literal, f(x)), x, 1)
+    assert hash(source) == hash(source.func(*source.args))
+    result = source.subs(f, sin)
+    assert result.args[0] is Literal
+    assert result.args[1] == sin(1)
+
+    class OtherLiteral(metaclass=OpaqueClass):
+        pass
+
+    assert Basic(Literal) != Basic(OtherLiteral)
+    assert Function('class_metadata', value=Literal) != Function('class_metadata', value=OtherLiteral)
+
+    class Value:
+        def __init__(self, value):
+            self.value = value
+
+        @property
+        def __class__(self):
+            raise ValueError('instance class hook')
+
+        def __eq__(self, other):
+            return type(self) is type(other) and self.value == other.value
+
+        def __hash__(self):
+            return hash(self.value)
+
+    first, second = Value(1), Value(2)
+    assert Basic(first) != Basic(second)
+    assert Function('native_metadata', value=first) != Function('native_metadata', value=second)
+
+    class OpaqueNode(Basic):
+        @property
+        def __class__(self):
+            raise ValueError('instance class hook')
+
+        @property
+        def is_FiniteSet(self):
+            raise ValueError('finite set hook')
+
+    first, second = OpaqueNode(S.One), OpaqueNode(S(2))
+    assert Function('basic_metadata', value=first) != Function('basic_metadata', value=second)
+
+
+def test_Subs_function_definition_preserves_symbol_names():
+    class Named(Function):
+        @classmethod
+        def eval(cls, arg):
+            if arg.is_Symbol:
+                return S.One if arg.name == 'x' else S(2)
+            return S(3)
+
+    for variable in (x, z):
+        clear_cache()
+        source = Subs(f(variable), variable, 0)
+        assert source.subs(f, Named).doit() == Named(0) == 3
+
+    class Pair(Function):
+        nargs = 2
+
+        @classmethod
+        def eval(cls, first, second):
+            return first + second
+
+    class Disabled(Function):
+        is_Function = False
+
+        @classmethod
+        def eval(cls, arg):
+            return arg**2
+
+    class Parent(Function):
+        pass
+
+    class Child(Parent):
+        pass
+
+    for body, old, replacement in [(f(x), f, Pair), (f(x), f, Disabled),
+                                   (Child(x), Parent, Named)]:
+        source = Subs(body, x, 0)
+        result = source.subs(old, replacement)
+        assert result == source
+        assert result.has(x)
+
+
 @pytest.mark.parametrize('variable', [Symbol('_0'), Symbol('_1'), Symbol('_2')])
 @pytest.mark.parametrize('point', [0, 1, Symbol('_0'), x])
 def test_Subs_reserved_binding_names(variable, point):

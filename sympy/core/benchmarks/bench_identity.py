@@ -1,8 +1,36 @@
-"""ASV cases for argument identity, metadata, ordering, and substitution."""
+r"""ASV cases for argument identity, metadata, ordering, and substitution.
+
+Reproduce a comparison with sympy/sympy_benchmarks at commit
+3a6f8897c0837c628a0cdb8a20663638b5de53ed, using ASV 0.6.6 and CPython 3.14.4.
+Keep the SymPy checkout at ../sympy relative to the corpus and copy this file
+to benchmarks/review_native_fields.py. Save asv.pr3.json in the corpus:
+
+    {
+      "version": 1, "project": "sympy", "repo": "../sympy",
+      "environment_type": "virtualenv", "pythons": ["3.14"],
+      "matrix": {"mpmath": ["1.4.1"], "numpy": ["2.5.4"]},
+      "build_command": ["python -m pip install build",
+                        "python -m build --wheel -o {build_cache_dir} {build_dir}"]
+    }
+
+Run ``asv machine --yes --config asv.pr3.json``. With python3.14 on PATH,
+substitute the master and PR commit hashes from the PR body for MASTER and PR:
+
+    PYTHONHASHSEED=0 SYMPY_USE_CACHE=yes SYMPY_CACHE_SIZE=1000 \
+      asv continuous --config asv.pr3.json --cpu-affinity 8 \
+      --attribute rounds=4 --attribute repeat=5 --interleave-rounds \
+      --factor 1.1 --only-changed --bench 'SELECTOR' MASTER PR
+
+Choose a local CPU for --cpu-affinity. The PR body provides the full and
+confirmation selectors; confirmation uses rounds=6 and repeat=10.
+Report a workload only when ASV flags a change above factor 1.1 in the same
+direction in both runs, with all four Python controls unflagged.
+Workloads perform setup and correctness assertions outside the timed methods.
+"""
 
 from __future__ import annotations
 
-from sympy import (Basic, Dummy, Expr, Float, Function, Lambda, Rational, S, Subs,
+from sympy import (Basic, Derivative, Dummy, Expr, Float, Function, Lambda, Rational, S, Subs,
                    Symbol, Tuple, default_sort_key, sin)
 from sympy.core import cache
 from sympy.core.cache import USE_CACHE, cacheit, clear_cache
@@ -829,3 +857,52 @@ class TimeTupleOrdering:
 
     def time_metadata_factory(self, mixed):
         Function('tuple_order_metadata', value=self.metadata)
+
+
+class TimeFunctionDefinition:
+    params = ['scalar', 'derivative', 'unhashable']
+    param_names = ['kind']
+
+    def setup(self, kind):
+        variable = Symbol('definition_variable')
+        self.function = Function('definition_function')
+        metaclass = (type('DefinitionMeta', (type(Function),), {'__hash__': None})
+                     if kind == 'unhashable' else type(Function))
+
+        class Square(Function, metaclass=metaclass):
+            @classmethod
+            def eval(cls, arg):
+                if isinstance(arg, Dummy):
+                    raise ValueError('unexpected dummy argument')
+                return arg**2
+
+        self.definition = Square
+        body = self.function(variable)
+        if kind == 'derivative':
+            body = Derivative(body, variable)
+        self.source = Subs(body, variable, 1)
+        expected = 2 if kind == 'derivative' else 1
+        assert self.source._eval_subs(self.function, self.definition).doit() == expected
+
+    def time_definition(self, kind):
+        self.source._eval_subs(self.function, self.definition).doit()
+
+
+class TimeBindingQueries:
+    def setup(self):
+        variable = Symbol('binding_variable')
+        self.missing = Symbol('absent_variable')
+        function = Function('binding_function')
+        self.source = Subs(function(variable), variable, 0)
+        assert self.source.as_dummy().doit() == function(0)
+        assert self.source.canonical_variables == {variable: Symbol('_0')}
+        assert not self.source._has(iterfreeargs, self.missing)
+
+    def time_as_dummy(self):
+        self.source.as_dummy()
+
+    def time_canonical_variables(self):
+        self.source.canonical_variables
+
+    def time_has_free(self):
+        self.source._has(iterfreeargs, self.missing)

@@ -31,7 +31,7 @@ def iterargs(expr):
     args = [expr]
     for i in args:
         yield i
-        if isinstance(i, Basic):
+        if issubclass(type(i), Basic):
             args.extend(i.args)
         elif not _is_class(i):
             args.extend(_iterable_args(getattr(i, 'args', ())))
@@ -60,7 +60,7 @@ def iterfreeargs(expr, _first=True):
     args = [expr]
     for i in args:
         yield i
-        is_basic = isinstance(i, Basic)
+        is_basic = issubclass(type(i), Basic)
         if not is_basic and _is_class(i):
             continue
         # The canonical root is filtered by its caller; nested scopes are separate.
@@ -69,7 +69,10 @@ def iterfreeargs(expr, _first=True):
             bound = getattr(canonical, 'bound_symbols', None)
             void = bound if bound is not None else i.canonical_variables.values()
             for arg in iterfreeargs(canonical, _first=False):
-                has = None if _is_class(arg) else getattr(arg, 'has', None)
+                is_class = _is_class(arg)
+                if is_class and arg in filter(_is_class, void):
+                    continue
+                has = None if is_class else getattr(arg, 'has', None)
                 if has is None or not has(*void):
                     yield arg
             continue

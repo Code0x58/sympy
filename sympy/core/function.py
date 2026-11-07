@@ -324,6 +324,12 @@ class FunctionClass(type):
         return cls.__name__
 
 
+def _can_substitute_function(expr, old, new):
+    """Match callable function heads and the replacement's argument count."""
+    return (callable(old) and callable(new) and old == expr.func
+            and len(expr.args) in new.nargs)
+
+
 class Application(Basic, metaclass=FunctionClass):
     """
     Base class for applied functions.
@@ -423,9 +429,8 @@ class Application(Basic, metaclass=FunctionClass):
         return self.__class__
 
     def _eval_subs(self, old, new):
-        if (old.is_Function and new.is_Function and
-            callable(old) and callable(new) and
-            old == self.func and len(self.args) in new.nargs):
+        if (old.is_Function and new.is_Function
+                and _can_substitute_function(self, old, new)):
             return new(*[i._subs(old, new) for i in self.args])
 
 
@@ -1136,15 +1141,21 @@ def _metadata_type_key(cls):
     return _get_comparison_key(_ClassIdentity(cls))
 
 
+@cacheit
+def _finite_set_class():
+    from sympy.sets.sets import FiniteSet
+    return FiniteSet
+
+
 def _canonical_function_metadata(value):
     """Canonicalize standard values, retaining complete subclass identities."""
-    if isinstance(value, Basic):
-        if isinstance(value, Tuple):
+    if issubclass(type(value), Basic):
+        if issubclass(type(value), Tuple):
             if type(value) is not Tuple:
                 return (_metadata_type_key(type(value)), value)
             return (Tuple, tuple(map(_canonical_function_metadata, value.args)))
-        if getattr(value, 'is_FiniteSet', False):
-            from sympy.sets.sets import FiniteSet
+        FiniteSet = _finite_set_class()
+        if issubclass(type(value), FiniteSet) or value is S.EmptySet:
             if type(value) is not FiniteSet and value is not S.EmptySet:
                 return (_metadata_type_key(type(value)), value)
             return (type(value), frozenset(map(_canonical_function_metadata, value.args)))
@@ -1160,7 +1171,7 @@ def _canonical_function_metadata(value):
         marker = Tuple if kind is tuple else _metadata_type_key(kind)
         return (marker, tuple(map(_canonical_function_metadata, tuple.__iter__(value))))
     if container is frozenset:
-        from sympy.sets.sets import FiniteSet
+        FiniteSet = _finite_set_class()
         cls = FiniteSet if frozenset.__len__(value) else S.EmptySet.func
         return (cls, frozenset(map(_canonical_function_metadata, frozenset.__iter__(value))))
     return (_metadata_type_key(type(value)), value)
@@ -2153,7 +2164,7 @@ class Derivative(Expr):
                 if not vi.is_Symbol}
             wrt = {syms.get(vi, vi) for vi in self._wrt_variables}
             forbidden = args[0].xreplace(syms).free_symbols & wrt
-            nfree = new.xreplace(syms).free_symbols
+            nfree = (new.xreplace(syms) if syms else new).free_symbols
             ofree = old.xreplace(syms).free_symbols
             if (nfree - ofree) & forbidden:
                 return Subs(self, old, new)
@@ -2902,13 +2913,13 @@ class Subs(Expr):
         # Compare content without running constructors; only commutative
         # operand order is irrelevant to the structure.
         def structure(node, restore=False):
-            if restore and isinstance(node, Symbol) and node == normalization_symbol:
+            if restore and issubclass(type(node), Symbol) and node == normalization_symbol:
                 node = variables[0]
             if type(node) is tuple:
                 return tuple, tuple(structure(arg, restore) for arg in node)
             if type(node) is frozenset:
                 return frozenset, frozenset(structure(arg, restore) for arg in node)
-            if not isinstance(node, Basic) or not node.args:
+            if not issubclass(type(node), Basic) or not node.args:
                 return type(node), node
             if type(node) is Mul:
                 commutative, noncommutative = node.args_cnc()
@@ -2972,6 +2983,17 @@ class Subs(Expr):
                 needs_mask([variable for _, variable in active])
                 or isinstance(old, FunctionClass) and callable(new)
                 and not _is_uninterpreted_function(new) and self._comparison_key[0])):
+            if (_is_class(new) and isinstance(new, FunctionClass)
+                    and type(self) is Subs and _is_class(old)
+                    and isinstance(old, FunctionClass) and self._comparison_key[0]
+                    and old.is_Function and new.is_Function
+                    and any(not _is_class(node) and isinstance(node, Function)
+                            and _can_substitute_function(node, old, new)
+                            for node in iterargs(self.expr))):
+                # Apply definitions to public arguments in the evaluator's order.
+                if isinstance(self.expr, Derivative):
+                    return self.func(subs(self.expr), v, [subs(point) for point in pt])
+                return self.expr.subs(list(zip(v, pt))).subs(old, new)
             if _is_ordinary_symbol(old) and old not in free:
                 def unchanged(arg):
                     from .power import Pow
