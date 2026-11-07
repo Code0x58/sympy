@@ -597,6 +597,21 @@ def test_Subs_coincident_partial_arguments():
     mixed = Subs(Derivative(x**2, x, y), (x, y), (0, 0))
     pure = Subs(Derivative(x**2, x, 2), (x, y), (0, 0))
     assert (mixed + pure).doit() == 2
+    compound = Subs(Derivative(f(x, y**2), x), (x, y**2), (0, 0))
+    difference = (first - compound)/z
+    assert difference.subs(z, 0).subs(f, Lambda((x, y), x)).doit() == 0
+
+
+def test_Subs_dependent_partial_points():
+    dependent = Subs(Derivative(f(x, y), x), (x, y), (y**2, y**2))
+    independent = Subs(Derivative(f(x, y**2), x), (x, y**2), (y**2, y**2))
+    difference = dependent - independent
+    assert difference.subs(f, Lambda((x, y), x**2*y)).doit().subs(y, 2) == 96
+    derivative = Derivative(f(x, y, z), x)
+    first = Subs(derivative, (x, y, z), (1, 1, x))
+    second = Subs(derivative, (z, y, x), (x, 1, 1))
+    difference = (first - second).subs(f, Lambda((x, y, z), x**2*z)).doit()
+    assert difference.subs(x, 2) == 2
 
 
 def test_higher_derivative_formal_partials_coincident_arguments():

@@ -2577,19 +2577,46 @@ class Subs(Expr):
     def __hash__(self):
         return super().__hash__()
 
+    @staticmethod
+    @cacheit
+    def _independent_variables(variables):
+        if all(v.is_Symbol for v in variables):
+            return True
+        if not all(isinstance(v, Expr) and v.is_scalar and not v.is_number
+                   and v.is_commutative is not None for v in variables):
+            return False
+        probe = Dummy()
+        return all(w.subs(v, probe) == w for v in variables for w in variables if v != w)
+
+    @staticmethod
+    @cacheit
+    def _dependent_points(variables, points):
+        if all(v.is_Symbol for v in variables) and not points.free_symbols.intersection(variables):
+            return False
+        probe = Dummy()
+        return any(v != p and any(q.subs(v, probe) != q for q in points)
+                   for v, p in zip(variables, points))
+
     def _hashable_content(self):
         unused = tuple(ordered((v, p) for v, p in zip(self.variables, self.point)
                                if not self.expr.has(v)))
         # Equal evaluation points do not identify partial differentiation variables.
         if (isinstance(self.expr, Derivative) and has_dups(self.point)
-                and all(v.is_Symbol for v in self.variables)):
+                and self._independent_variables(self.variables)):
+            if self._dependent_points(self.variables, self.point):
+                # Dependent points must retain the sequential substitution order.
+                return (2, self.expr, self.variables, self.point) + unused
             variables = list(dict.fromkeys(v for v in preorder_traversal(self.expr)
                                           if v in self.variables))
             variables.extend(ordered(v for v in self.variables if v not in variables))
-            canonical = Lambda(tuple(variables), self.expr).canonical_variables
+            coordinates = {v: Dummy(commutative=v.is_commutative)
+                           for v in variables if not v.is_Symbol}
+            expr = self.expr.xreplace(coordinates)
+            signature = tuple(coordinates.get(v, v) for v in variables)
+            canonical = Lambda(signature, expr).canonical_variables
             canonical = {v: Symbol(d.name, commutative=v.is_commutative)
                          for v, d in canonical.items()}
-            expr = self.expr.xreplace(canonical)
+            expr = expr.xreplace(canonical)
             if isinstance(expr, Derivative):
                 expr = expr.canonical
             points = Tuple(*(self.point[self.variables.index(v)] for v in variables))
