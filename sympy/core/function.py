@@ -37,6 +37,7 @@ from collections.abc import Iterable
 import copyreg
 
 from .add import Add
+from .assumptions import assumptions
 from .basic import Basic, _atomic
 from .cache import cacheit
 from .containers import Tuple, Dict
@@ -51,6 +52,7 @@ from .parameters import global_parameters
 from .rules import Transform
 from .singleton import S
 from .sympify import sympify, _sympify
+from .traversal import preorder_traversal
 
 from .sorting import default_sort_key, ordered
 from sympy.utilities.exceptions import (sympy_deprecation_warning,
@@ -663,6 +665,82 @@ class Function(Application, Expr):
                 df = Function.fdiff(self, i)
             l.append(df * da)
         return Add(*l)
+
+    def _eval_derivative_n_times(self, s, n):
+        if not (isinstance(n, (int, Integer)) and n > 1 and isinstance(s, Symbol)
+                and self.is_commutative
+                and self.free_symbols - s.free_symbols
+                and type(self)._eval_derivative is Function._eval_derivative):
+            return super()._eval_derivative_n_times(s, n)
+        varying = [(i, arg) for i, arg in enumerate(self.args) if arg.has(s)]
+        if not varying or all(arg == s for _, arg in varying):
+            return super()._eval_derivative_n_times(s, n)
+        args = list(self.args)
+
+        def unsupported_partial(expr, variables, parents=()):
+            return any(d.has(*variables) and (
+                d.expr.is_Function
+                and d.expr.func._eval_derivative is not Function._eval_derivative
+                or d.expr.func in parents)
+                for d in expr.atoms(Derivative))
+
+        if len(varying) > 1:
+            from sympy.polys.polytools import Poly
+            shifts = []
+            generators = []
+            substitutions = {}
+            for i, arg in varying:
+                placeholders = [Dummy(**assumptions(arg))] + [Dummy() for _ in range(n)]
+                args[i] = placeholders[0]
+                shifts.extend(zip(placeholders, placeholders[1:]))
+                generators.extend(placeholders[1:])
+                substitutions.update((p, arg.diff((s, k), simplify=False))
+                                     for k, p in enumerate(placeholders))
+            result = self.func(*args)
+            for _ in range(n):
+                result = Add(*(result.diff(p, simplify=False)*dp for p, dp in shifts))
+            if unsupported_partial(result, [args[i] for i, _ in varying]):
+                return super()._eval_derivative_n_times(s, n)
+            # Keep each inner derivative as an independent polynomial factor.
+            result = Poly(result, *generators).as_expr()
+            coordinates = {args[i]: arg for i, arg in varying}
+            partials = {}
+            for derivative in result.atoms(Derivative):
+                bound = {v for d in derivative.atoms(Derivative)
+                         for v, _ in d.variable_count}
+                variables = tuple(v for v in coordinates if v in bound)
+                if variables:
+                    fixed = {v: arg for v, arg in coordinates.items() if v not in bound}
+                    partials[derivative] = Subs(derivative.xreplace(fixed), variables,
+                                               tuple(coordinates[v] for v in variables))
+            # Sequential substitution preserves the bindings of formal partials.
+            return result.xreplace(partials).subs(substitutions)
+
+        i, arg = varying[0]
+        t = Dummy(**assumptions(arg))
+        args[i] = t
+        outer = self.func(*args)
+        first = outer.diff(t, simplify=False)
+        # Formal first partials can be retained at higher orders.
+        formal = {d.expr.func for d in first.atoms(Derivative) if d.has(t)}
+        parents = {node.func for node in outer.atoms(Expr) if node.has(t)} - formal
+        darg = arg.diff(s)
+        if not darg.has(s):
+            result = outer.diff((t, n), simplify=False)
+            if unsupported_partial(result, (t,), parents):
+                return super()._eval_derivative_n_times(s, n)
+            return result.subs(t, arg)*darg**n
+
+        partials = [first] + [outer.diff((t, k), simplify=False) for k in range(2, n + 1)]
+        if any(unsupported_partial(p, (t,), parents) for p in partials):
+            return super()._eval_derivative_n_times(s, n)
+        from sympy.functions.combinatorial.numbers import bell
+        derivatives = [darg] + [arg.diff((s, k), simplify=False) for k in range(2, n + 1)]
+        placeholders = [Dummy() for _ in derivatives]
+        substitutions = dict(zip(placeholders, derivatives))
+        return Add(*(p.subs(t, arg)
+                     * bell(n, k, placeholders[:n - k + 1]).xreplace(substitutions)
+                     for k, p in enumerate(partials, 1)))
 
     def _eval_is_commutative(self):
         return fuzzy_and(a.is_commutative for a in self.args)
@@ -2374,18 +2452,17 @@ class Subs(Expr):
             p = CustomStrPrinter(settings)
             return p.doprint(expr)
         while 1:
-            s_pts = {p: Symbol(pre + mystr(p)) for p in pts}
+            s_pts = {p: _SubsPoint(pre + mystr(p), p) if isinstance(p, Basic)
+                     else Symbol(pre + mystr(p)) for p in pts}
             reps = [(v, s_pts[p])
                 for v, p in zip(variables, point)]
-            # if any underscore-prepended symbol is already a free symbol
-            # and is a variable with a different point value, then there
-            # is a clash, e.g. _0 clashes in Subs(_0 + _1, (_0, _1), (1, 0))
+            # Avoid collisions with free symbols or variables mapped to other
+            # point values, e.g. _0 clashes in Subs(_0 + _1, (_0, _1), (1, 0))
             # because the new symbol that would be created is _1 but _1
             # is already mapped to 0 so __0 and __1 are used for the new
             # symbols
-            if any(r in expr.free_symbols and
-                   r in variables and
-                   Symbol(pre + mystr(point[variables.index(r)])) != r
+            if any(r in expr.free_symbols and (r not in variables or
+                   s_pts[point[variables.index(r)]] != r)
                    for _, r in reps):
                 pre += "_"
                 continue
@@ -2402,12 +2479,10 @@ class Subs(Expr):
         e, v, p = self.args
 
         # remove self mappings
-        for i, (vi, pi) in enumerate(zip(v, p)):
-            if vi == pi:
-                v = v[:i] + v[i + 1:]
-                p = p[:i] + p[i + 1:]
-        if not v:
+        reps = [(vi, pi) for vi, pi in zip(v, p) if vi != pi]
+        if not reps:
             return self.expr
+        v, p = zip(*reps)
 
         if isinstance(e, Derivative):
             # apply functions first, e.g. f -> cos
@@ -2509,10 +2584,52 @@ class Subs(Expr):
     def __hash__(self):
         return super().__hash__()
 
+    @staticmethod
+    @cacheit
+    def _independent_variables(variables):
+        if all(v.is_Symbol for v in variables):
+            return True
+        if not all(isinstance(v, Expr) and v.is_scalar and not v.is_number
+                   and v.is_commutative is not None for v in variables):
+            return False
+        probe = Dummy()
+        return all(w.subs(v, probe) == w for v in variables for w in variables if v != w)
+
+    @staticmethod
+    @cacheit
+    def _comparison_points(variables, points):
+        if all(v.is_Symbol for v in variables) and not points.free_symbols.intersection(variables):
+            return points
+        return Tuple(*(p.subs(list(zip(variables[i + 1:], points[i + 1:])))
+                       for i, p in enumerate(points)))
+
     def _hashable_content(self):
-        return (self._expr.xreplace(self.canonical_variables),
-            ) + tuple(ordered([(v, p) for v, p in
-            zip(self.variables, self.point) if not self.expr.has(v)]))
+        unused = tuple(ordered((v, p) for v, p in zip(self.variables, self.point)
+                               if not self.expr.has(v)))
+        # Equal evaluation points do not identify partial differentiation variables.
+        if (isinstance(self.expr, Derivative) and has_dups(self.point)
+                and self._independent_variables(self.variables)):
+            variables = list(dict.fromkeys(v for v in preorder_traversal(self.expr)
+                                          if v in self.variables))
+            variables.extend(ordered(v for v in self.variables if v not in variables))
+            coordinates = {v: Dummy(commutative=v.is_commutative)
+                           for v in variables if not v.is_Symbol}
+            expr = self.expr.xreplace(coordinates)
+            # Algebraic substitution can affect more than exact coordinate nodes.
+            if any(expr.subs(v, d) != expr for v, d in coordinates.items()):
+                return (2, self.expr, self.variables, self.point) + unused
+            signature = tuple(coordinates.get(v, v) for v in variables)
+            canonical = Lambda(signature, expr).canonical_variables
+            canonical = {v: Symbol(d.name, commutative=v.is_commutative)
+                         for v, d in canonical.items()}
+            expr = expr.xreplace(canonical)
+            if isinstance(expr, Derivative):
+                expr = expr.canonical
+            # Compose the points in their sequential substitution order.
+            points = self._comparison_points(self.variables, self.point)
+            points = Tuple(*(points[self.variables.index(v)] for v in variables))
+            return (True, expr, Tuple(*canonical.values()), points) + unused
+        return (False, self._expr.xreplace(self.canonical_variables)) + unused
 
     def _eval_subs(self, old, new):
         # Subs doit will do the variables in order; the semantics
@@ -3571,3 +3688,20 @@ def nfloat(expr, n=15, exponent=False, dkeys=False):
 
 
 from .symbol import Dummy, Symbol
+
+
+class _SubsPoint(Symbol):
+    """An opaque evaluation point for Subs comparison."""
+
+    __slots__ = ('point',)
+
+    def __new__(cls, name, point):
+        obj = Symbol.__xnew__(cls, name)
+        obj.point = point
+        return obj
+
+    def _hashable_content(self):
+        return super()._hashable_content() + (self.point,)
+
+    def __getnewargs_ex__(self):
+        return (self.name, self.point), {}

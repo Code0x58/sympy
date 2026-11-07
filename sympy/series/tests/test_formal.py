@@ -81,6 +81,7 @@ def test_rational_algorithm():
 def test_rational_independent():
     ri = rational_independent
     assert ri([], x) == []
+    assert ri([y + 1, 1/x], x) == [y + 1 + 1/x]
     assert ri([cos(x), sin(x)], x) == [cos(x), sin(x)]
     assert ri([x**2, sin(x), x*sin(x), x**3], x) == \
         [x**3 + x**2, x*sin(x) + sin(x)]

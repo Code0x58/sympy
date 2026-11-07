@@ -1214,7 +1214,99 @@ class Pow(Expr):
         dbase = self.base.diff(s)
         dexp = self.exp.diff(s)
 
+        if dexp == 0:
+            reduced_exp = self.exp - 1
+            # Keep cancellation available for unresolved powers of products or powers.
+            if self.exp.is_integer or reduced_exp.is_nonnegative or (
+                    not reduced_exp.is_negative and not (self.base.is_Mul or self.base.is_Pow)):
+                return dbase * self.exp * self.base**reduced_exp
+
         return self * (dexp * log(self.base) + dbase * self.exp/self.base)
+
+    def _eval_derivative_n_times(self, s, n):
+        if not (isinstance(n, (int, Integer)) and n > 1 and isinstance(s, Symbol)
+                and self.is_commutative and self.exp.diff(s) == 0
+                and (not self.exp.is_number or self.base.free_symbols - s.free_symbols)):
+            return super()._eval_derivative_n_times(s, n)
+        base = self.base
+        multiplier = S.One
+        depth = 0
+        # Keep independent factors in self so their zeros do not become poles.
+        constant, base = base.as_independent(s, as_Add=False)
+        scaled = constant != 1
+        while base.is_Pow and base.exp.diff(s) == 0:
+            multiplier *= base.exp
+            constant, base = base.base.as_independent(s, as_Add=False)
+            scaled |= constant != 1
+            depth += 1
+        if base.is_Mul and all(e.is_Integer and e < 0 for e in base.as_powers_dict().values()):
+            multiplier = -multiplier
+            base = 1/base
+            depth += 1
+        if multiplier == 0:
+            return S.Zero
+        exponent = multiplier*self.exp
+        dbase = base.diff(s)
+        if dbase == 0:
+            return S.Zero
+
+        if dbase.has(s):
+            from sympy.functions.combinatorial.numbers import bell
+            derivatives = [dbase] + [base.diff((s, k), simplify=False) for k in range(2, n + 1)]
+            placeholders = [Dummy() for _ in derivatives]
+            substitutions = dict(zip(placeholders, derivatives))
+            partials = [S.Zero] + [bell(n, k, placeholders[:n - k + 1]).xreplace(substitutions)
+                                   for k in range(1, n + 1)]
+        else:
+            partials = [S.Zero]*n + [dbase**n]
+
+        if scaled or depth > 1 or not multiplier.is_Rational:
+            coefficient = S.One
+            polynomial = S.Zero
+            for k in range(1, n + 1):
+                coefficient *= exponent - k + 1
+                polynomial = base*polynomial + coefficient*partials[k]
+            return self*polynomial/base**n
+
+        coefficient = S.One
+        groups = {}
+        for k in range(1, n + 1):
+            coefficient *= exponent - k + 1
+            value = coefficient*partials[k]
+            if value == 0:
+                continue
+            reduced_k = k
+            while (reduced := value.extract_multiplicatively(base)) is not None:
+                value = reduced
+                reduced_k -= 1
+            # (b**(p/q))**q = b**p uses only integer powers.
+            shift, remainder = divmod(reduced_k, multiplier.p)
+            if remainder > 0 and (self.exp - multiplier.q*(shift + 1)).is_nonnegative:
+                shift += 1
+            groups.setdefault(shift, []).append((reduced_k, value))
+
+        # Keep shared denominators outside a polynomial in the base.
+        merged = {}
+        for shift, values in groups.items():
+            remainder = max(k for k, _ in values) - multiplier.p*shift
+            key = ('denominator',) if remainder > 0 else ('power', shift)
+            if key in merged:
+                previous, entries = merged[key]
+                merged[key] = (max(shift, previous), entries + values)
+            else:
+                merged[key] = (shift, values)
+
+        terms = []
+        for shift, values in merged.values():
+            polynomial = S.Zero
+            previous = min(k for k, _ in values)
+            for k, value in sorted(values, key=lambda item: item[0]):
+                polynomial = base**(k - previous)*polynomial + value
+                previous = k
+            term = (self.base**(self.exp - multiplier.q*shift) *
+                    base**(multiplier.p*shift - previous)*polynomial)
+            terms.append(Mul._cancel_derivative_powers(term))
+        return Add(*terms)
 
     def _eval_evalf(self, prec):
         base, exp = self.as_base_exp()

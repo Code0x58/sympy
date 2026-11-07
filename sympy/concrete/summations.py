@@ -337,7 +337,17 @@ class Sum(AddWithLimits, ExprWithIntLimits):
         _, a, b = limit
         if x in a.free_symbols or x in b.free_symbols:
             return None
-        df = Derivative(f, x, evaluate=True)
+        index = limit[0]
+        integer = ((a.is_integer and b in (S.Infinity, S.NegativeInfinity)) or
+                   (b.is_integer and a in (S.Infinity, S.NegativeInfinity)))
+        dummy = _dummy_with_inherited_properties_concrete(limit, assume_integer=bool(integer))
+        # Nested bindings of the index must keep their own assumptions.
+        if dummy and not x.has(index) and not f.find(
+                lambda expr: index in getattr(expr, 'bound_symbols', ())):
+            df = Derivative(f.xreplace({index: dummy}), x, evaluate=True)
+            df = df.xreplace({dummy: index})
+        else:
+            df = Derivative(f, x, evaluate=True)
         rv = self.func(df, limit)
         return rv
 
@@ -1708,10 +1718,12 @@ def _eval_matrix_sum(expression):
                 return newf.doit()
 
 
-def _dummy_with_inherited_properties_concrete(limits):
+def _dummy_with_inherited_properties_concrete(limits, *, assume_integer=False):
     """
     Return a Dummy symbol that inherits as many assumptions as possible
     from the provided symbol and limits.
+
+    ``assume_integer`` supplies the discrete domain when an endpoint is infinite.
 
     If the symbol already has all True assumption shared by the limits
     then return None.
@@ -1728,6 +1740,8 @@ def _dummy_with_inherited_properties_concrete(limits):
 
     assumptions_to_keep = {}
     assumptions_to_add = {}
+    if assume_integer and x.is_integer is not True:
+        assumptions_to_add['integer'] = True
     for assum in assumptions_to_consider:
         assum_true = x._assumptions.get(assum, None)
         if assum_true:

@@ -109,7 +109,7 @@ def test_heuristic_abaco2_unique_unknown():
     F = Function('F')
     eq = f(x).diff(x) - x**(a - 1)*(f(x)**(1 - b))*F(x**a/a + f(x)**b/b)
     i = infinitesimals(eq, hint='abaco2_unique_unknown')
-    assert i == [{eta(x, f(x)): -f(x)*f(x)**(-b), xi(x, f(x)): x*x**(-a)}]
+    assert i == [{eta(x, f(x)): -f(x)**(1 - b), xi(x, f(x)): x**(1 - a)}]
     assert checkinfsol(eq, i)[0]
 
     eq = f(x).diff(x) + tan(F(x**2 + f(x)**2) + atan(x/f(x)))

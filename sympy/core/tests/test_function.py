@@ -14,7 +14,7 @@ from sympy.core.power import Pow
 from sympy.core.relational import Eq
 from sympy.core.singleton import S
 from sympy.core.symbol import symbols, Dummy, Symbol
-from sympy.functions.elementary.complexes import im, re
+from sympy.functions.elementary.complexes import Abs, conjugate, im, re
 from sympy.functions.elementary.exponential import log, exp
 from sympy.functions.elementary.miscellaneous import sqrt
 from sympy.functions.elementary.piecewise import Piecewise
@@ -74,6 +74,48 @@ def test_general_function():
     assert edy == 0
     assert edxdx == diff(diff(nu(x), x), x)
     assert edxdy == 0
+
+def test_higher_derivative_argument_assumptions():
+    class F(Function):
+        def fdiff(self, argindex=1):
+            return Abs(self.args[argindex - 1])
+
+    x = Symbol('x', real=True)
+    a = Symbol('a', positive=True)
+    assert F(a*x).diff(x, 2).subs({a: 3, x: 2}) == 9
+    assert F(a*x**2).diff(x, 2).subs({a: 3, x: 2}) == 216
+    assert F(a*x, x**2).diff(x, 2).subs({a: 3, x: 2}) == 33
+    assert F(I*a*x).diff(x, 2).subs({a: 3, x: 2}) == 9*I
+    assert F(I*a*x, x**2).diff(x, 2).subs({a: 3, x: 2}) == 24 + 9*I
+    assert F(I*a*x**2).diff(x, 2).subs({a: 3, x: 2}) == 216*I
+
+    class G(Function):
+        def fdiff(self, argindex=1):
+            return conjugate(self.args[argindex - 1])
+
+    assert G(I*a*x).diff(x, 2).subs({a: 3, x: 2}) == 9
+    assert G(I*a*x**2).diff(x, 2).subs({a: 3, x: 2}) == 216
+    x = Symbol('x', imaginary=True)
+    assert F(a*x).diff(x, 2).subs({a: 3, x: 2*I}) == -9*I
+
+
+@pytest.mark.parametrize('shift', [0, 1], ids=['function', 'sum'])
+def test_higher_derivative_function_rewrite(shift):
+    class G(Function):
+        def fdiff(self, argindex=1):
+            return conjugate(self.args[argindex - 1])
+
+    class F(G):
+        @classmethod
+        def eval(cls, arg):
+            if arg.is_Symbol:
+                return G(arg) + shift
+
+    x = Symbol('x', real=True)
+    a = Symbol('a', positive=True)
+    assert F(I*a*x).diff(x, 2).subs({a: 3, x: 2}) == 9
+    assert F(I*a*x**2).diff(x, 2).subs({a: 3, x: 2}) == 216
+
 
 def test_general_function_nullary():
     nu = Function('nu')
@@ -474,6 +516,7 @@ def test_Subs():
     assert Subs(x, x, 1).subs(x, y).has(y)
     # self mapping var/point
     assert Subs(Derivative(f(x), (x, 2)), x, x).doit() == f(x).diff(x, x)
+    assert Subs(x + y + z, (x, y, z), (x, y, x)).doit() == 2*x + y
     assert Subs(x, x, 0).has(x)  # it's a structural answer
     assert not Subs(x, x, 0).free_symbols
     assert Subs(Subs(x + y, x, 2), y, 1) == Subs(x + y, (x, y), (2, 1))
@@ -540,6 +583,75 @@ def test_Subs():
     assert Derivative(f(x, g(x)), x).doit() == Derivative(
         f(x, g(x)), g(x))*Derivative(g(x), x) + Subs(Derivative(
         f(y, g(x)), y), y, x)
+
+def test_higher_derivative_formal_partials():
+    expr = f(x + y, x**2)
+    result = expr.diff(x, 3).subs(f, Lambda((t, w), t**2*w**2)).doit()
+    assert result.subs({x: 1, y: 0}) == 120
+
+
+def test_Subs_coincident_partial_arguments():
+    first = Subs(Derivative(f(x, y), x), (x, y), (0, 0))
+    second = Subs(Derivative(f(x, y), y), (x, y), (0, 0))
+    assert (first - second).subs(f, Lambda((x, y), x)).doit() == 1
+    assert first == Subs(Derivative(f(y, x), y), (x, y), (0, 0))
+    mixed = Subs(Derivative(x**2, x, y), (x, y), (0, 0))
+    pure = Subs(Derivative(x**2, x, 2), (x, y), (0, 0))
+    assert (mixed + pure).doit() == 2
+    compound = Subs(Derivative(f(x, y**2), x), (x, y**2), (0, 0))
+    difference = (first - compound)/z
+    assert difference.subs(z, 0).subs(f, Lambda((x, y), x)).doit() == 0
+
+
+def test_Subs_dependent_partial_points():
+    dependent = Subs(Derivative(f(x, y), x), (x, y), (y**2, y**2))
+    independent = Subs(Derivative(f(x, y**2), x), (x, y**2), (y**2, y**2))
+    difference = dependent - independent
+    assert difference.subs(f, Lambda((x, y), x**2*y)).doit().subs(y, 2) == 96
+    derivative = Derivative(f(x, y, z), x)
+    first = Subs(derivative, (x, y, z), (1, 1, x))
+    second = Subs(derivative, (z, y, x), (x, 1, 1))
+    difference = (first - second).subs(f, Lambda((x, y, z), x**2*z)).doit()
+    assert difference.subs(x, 2) == 2
+    commuted = Subs(derivative, (y, x, z), (1, 1, x))
+    assert first == commuted
+
+
+def test_Subs_compound_partial_points():
+    first = Subs(Derivative(f(x, y**2, z, y**4), x),
+                 (x, y**2, z), (y**4, y**4, y**8))
+    second = Subs(Derivative(f(x, t, z, y**4), x),
+                  (x, t, z), (y**8, y**4, y**8))
+    assert first != second
+
+
+def test_higher_derivative_formal_partials_coincident_arguments():
+    a = Symbol('a')
+    result = f(a*x, x).diff(x, 3).subs(a, 1)
+    result = result.subs(f, Lambda((t, w), t**2*w**3)).doit()
+    assert result.subs(x, 1) == 60
+
+
+def test_higher_derivative_formal_partial_cancellation():
+    a = Symbol('a')
+    result = (f(a*x, x) - f(x, a*x)).diff(x, 2).subs(a, 1).subs(x, 0)
+    assert result == 0
+
+
+def test_Subs_partial_point_symbol_collision():
+    point_symbol = Symbol('_0')
+    partial = Subs(Derivative(f(x, point_symbol), x), x, 0)
+    total = Subs(Derivative(f(x, x), x), x, 0)
+    assert (total - partial).subs(f, Lambda((t, w), t + w)).doit() == 1
+
+
+@pytest.mark.parametrize('point', [y, x*y], ids=['symbol', 'product'])
+def test_Subs_point_assumptions(point):
+    y_real = Symbol('y', real=True)
+    generic = Subs(Derivative(f(x), x), x, point)
+    real = Subs(Derivative(f(x), x), x, point.xreplace({y: y_real}))
+    assert generic != real
+
 
 def test_doitdoit():
     done = Derivative(f(x, g(x)), x, g(x)).doit()

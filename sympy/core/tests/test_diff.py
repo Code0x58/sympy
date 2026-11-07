@@ -9,12 +9,14 @@ from sympy.core.symbol import Symbol
 from sympy.functions.combinatorial.factorials import factorial
 from sympy.functions.elementary.complexes import (im, re)
 from sympy.functions.elementary.exponential import (exp, log)
-from sympy.functions.elementary.miscellaneous import Max
+from sympy.functions.elementary.miscellaneous import Max, sqrt
 from sympy.functions.elementary.piecewise import Piecewise
-from sympy.functions.elementary.trigonometric import (cos, cot, sin, tan)
+from sympy.functions.elementary.trigonometric import (atan2, cos, cot, sin, tan)
+from sympy.functions.special.bessel import besselj
 from sympy.tensor.array.ndim_array import NDimArray
 from sympy.testing.pytest import raises, slow
 from sympy.abc import a, b, c, x, y, z
+from sympy.tensor.indexed import Idx
 
 def test_diff():
     assert Rational(1, 3).diff(x) is S.Zero
@@ -84,6 +86,101 @@ def test_diff3():
     e = (Rational(2)**a/log(Rational(2)))
     assert e == 2**a*log(Rational(2))**(-1)
     assert e.diff(a) == 2**a
+
+
+def test_diff_pow_exponent_dependency():
+    f = Function("f")
+    n = Symbol("n", integer=True, positive=True)
+    i = Idx("i", n + 1)
+
+    assert (x**n).diff(x) == n*x**(n - 1)
+    assert (x**i).diff(x) == i*x**(i - 1)
+    assert (x**f(x)).diff(x) == x**f(x)*(log(x)*f(x).diff(x) + f(x)/x)
+
+
+def test_diff_pow_at_zero():
+    # Substitute the base first to detect an uncancelled x/x.
+    assert (x**a).diff(x).subs(x, 0).subs(a, 1) == 1
+    assert ((x + 1)**a).diff(x).subs(x, -1).subs(a, 1) == 1
+    assert ((x**2)**Rational(3, 2)).diff(x).subs(x, 0) == 0
+    assert (x*sqrt(x**2)).diff(x).subs(x, 0) == 0
+
+
+def test_diff_pow_product_at_zero():
+    p = Symbol('p', positive=True)
+    assert (x*(x**2)**(1/(p + 1))).diff(x).subs(x, 0) == 0
+    assert (x*(x**2)**a).diff(x).subs(a, S.Half).subs(x, 0) == 0
+    assert (x*(x*(x + 1))**a).diff(x).subs(a, S.Half).subs(x, 0) == 0
+    assert (x*x**a).diff(x).subs({a: S.Half, x: 0}, simultaneous=True) == 0
+    assert (x**3*(x**2)**a).diff(x, 2).subs(a, S.Half).subs(x, 0) == 0
+    assert (x*(x**2)**a).diff(x).subs(a, -1).subs(x, 0) is S.ComplexInfinity
+    assert ((x + x**2)*(x + x**2)**a).diff(x, 2).subs(a, -1).subs(x, 0) == 0
+    assert (sin(x)*sin(x)**a).diff(x, 2).subs(a, -1).subs(x, 0) == 0
+
+
+def test_diff_pow_higher_at_zero():
+    assert ((x*(x + 1))**a).diff(x, 2).subs(a, 1).subs(x, 0) == 2
+    assert ((x*(x + 1))**a + x).diff(x, 2).subs(a, 1).subs(x, 0) == 2
+    assert ((x*(x + 1))**a).diff(x, 4).subs(a, 3).subs(x, 0) == 72
+    assert (sin(x)**a).diff(x, 4).subs(a, 2).subs(x, 0) == -8
+    assert ((sin(x)**2)**a).diff(x, 3).subs(a, 2).subs(x, 0) == 0
+    assert ((sin(x)**2)**a).diff(x, 4).subs(a, S.Half).subs(x, 0) == 0
+    assert (((x**2 - 1)**2)**a).diff(x, 2).subs(a, S.Half).subs(x, 0) == -2
+    assert (((x + 1)**-2)**a).diff(x, 2).subs(a, -1).subs(x, -1) == 2
+    assert (sqrt(x + 1)**a).diff(x, 2).subs(a, 4).subs(x, -1) == 2
+    assert (((x*(x + 1))**Rational(3, 2))**a).diff(x, 4).subs(a, 2).subs(x, 0) == 72
+
+
+def test_diff_pow_zero_scale():
+    assert sqrt(a*x).diff(x, 2).subs(a, 0) == 0
+    assert sqrt(a*(x**2 + 1)).diff(x, 2).subs(a, 0) == 0
+
+
+def test_diff_pow_reciprocal_product_at_zero():
+    expr = x*(x + 1)
+    assert ((expr**-2)**a).diff(x, 2).subs(a, -1).subs(x, 0) == 2
+    assert ((expr**-2)**a).diff(x, 4).subs(a, -1).subs(x, 0) == 24
+
+
+def test_diff_pow_symbolic_nested_at_zero():
+    expr = ((x*(x + 1))**b)**a
+    assert expr.diff(x, 2).subs({a: 1, b: 1}).subs(x, 0) == 2
+    assert expr.diff(x, 4).subs({a: 2, b: 2}).subs(x, 0) == 24
+    assert expr.diff(x, 2).subs({a: 4, b: S.Half}).subs(x, 0) == 2
+    assert expr.diff(x, 2).subs({a: S.Half, b: 2}).subs(x, -S.Half) == -2
+    assert (((x**b)**c)**a).diff(x, 2).subs({a: 2, b: 1, c: 1}).subs(x, 0) == 2
+
+
+def test_diff_composed_pow_at_zero():
+    expr = (x*(x + 1))**a
+    assert sin(expr).diff(x, 2).subs(a, 1).subs(x, 0) == 2
+    assert sin(expr).diff(x, 3).subs(a, 1).subs(x, 0) == -1
+    assert exp(expr).diff(x, 2).subs(a, 1).subs(x, 0) == 3
+    assert log(1 + expr).diff(x, 2).subs(a, 1).subs(x, 0) == 1
+    assert sqrt(1 + expr).diff(x, 2).subs(a, 1).subs(x, 0) == Rational(3, 4)
+    f = Function('f')
+    assert f(expr).diff(x, 2).subs(f, sin).doit().subs(a, 1).subs(x, 0) == 2
+
+
+def test_diff_multivariate_composed_pow_at_zero():
+    expr = (x*(x + 1))**a
+    assert atan2(expr, 1).diff(x, 2).subs(a, 1).subs(x, 0) == 2
+    assert besselj(b, expr).diff(x, 2).subs({a: 1, b: 0}).subs(x, 0) == -S.Half
+    assert atan2(expr, x + 1).diff(x, 2).subs(a, 1).subs(x, 0) == 0
+    assert atan2(expr, x + 1).diff(x, 3).subs(a, 1).subs(x, 0) == -2
+    expr = besselj(a*x + b, (x*(x + 1))**c)
+    assert expr.diff(x, 2).subs({a: 0, b: 2, c: 1}).subs(x, 0) == Rational(1, 4)
+
+
+def test_diff_pow_product_noncommutative():
+    A = Symbol('A', commutative=False)
+    B = Symbol('B', commutative=False)
+    derivative = (A*x*x**a*B).diff(x).subs(a, S.Half)
+    assert derivative.subs(x, 0) == 0
+    assert derivative.subs(x, 1) == Rational(3, 2)*A*B
+    derivative = (A*sin(x)*sin(x)**a*B).diff(x, 2)
+    assert derivative.subs(a, -1).subs(x, 0) == 0
+    assert derivative.subs(a, 1).subs(x, 0) == 2*A*B
 
 
 def test_diff_no_eval_derivative():

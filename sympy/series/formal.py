@@ -6,6 +6,7 @@ from collections import defaultdict
 from sympy.core.numbers import (nan, oo, zoo)
 from sympy.core.add import Add
 from sympy.core.expr import Expr
+from sympy.core.exprtools import Factors
 from sympy.core.function import Derivative, Function, expand
 from sympy.core.mul import Mul
 from sympy.core.numbers import Rational
@@ -188,10 +189,10 @@ def rational_independent(terms, x):
     ind = terms[0:1]
 
     for t in terms[1:]:
-        n = t.as_independent(x)[1]
+        n = t.as_independent(x, as_Add=False)[1]
         for i, term in enumerate(ind):
-            d = term.as_independent(x)[1]
-            q = (n / d).cancel()
+            d = term.as_independent(x, as_Add=False)[1]
+            q = Factors(n / d).as_expr().cancel()
             if q.is_rational_function(x):
                 ind[i] += t
                 break
@@ -233,6 +234,9 @@ def simpleDE(f, x, g, order=4):
     for k in range(1, order + 1):
         eq, DE = _makeDE(k)
         eq = eq.expand()
+        if f != 0:
+            basis = f.expand()
+            eq = Add(*(Factors(term/basis).as_expr() for term in Add.make_args(eq)))
         terms = eq.as_ordered_terms()
         ind = rational_independent(terms, x)
         if found or len(ind) == k:
