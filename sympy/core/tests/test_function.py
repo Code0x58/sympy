@@ -589,6 +589,16 @@ def test_higher_derivative_formal_partials():
     assert result.subs({x: 1, y: 0}) == 120
 
 
+def test_Subs_coincident_partial_arguments():
+    first = Subs(Derivative(f(x, y), x), (x, y), (0, 0))
+    second = Subs(Derivative(f(x, y), y), (x, y), (0, 0))
+    assert (first - second).subs(f, Lambda((x, y), x)).doit() == 1
+    assert first == Subs(Derivative(f(y, x), y), (x, y), (0, 0))
+    mixed = Subs(Derivative(x**2, x, y), (x, y), (0, 0))
+    pure = Subs(Derivative(x**2, x, 2), (x, y), (0, 0))
+    assert (mixed + pure).doit() == 2
+
+
 def test_higher_derivative_formal_partials_coincident_arguments():
     a = Symbol('a')
     result = f(a*x, x).diff(x, 3).subs(a, 1)

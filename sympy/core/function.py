@@ -52,6 +52,7 @@ from .parameters import global_parameters
 from .rules import Transform
 from .singleton import S
 from .sympify import sympify, _sympify
+from .traversal import preorder_traversal
 
 from .sorting import default_sort_key, ordered
 from sympy.utilities.exceptions import (sympy_deprecation_warning,
@@ -2577,9 +2578,23 @@ class Subs(Expr):
         return super().__hash__()
 
     def _hashable_content(self):
-        return (self._expr.xreplace(self.canonical_variables),
-            ) + tuple(ordered([(v, p) for v, p in
-            zip(self.variables, self.point) if not self.expr.has(v)]))
+        unused = tuple(ordered((v, p) for v, p in zip(self.variables, self.point)
+                               if not self.expr.has(v)))
+        # Equal evaluation points do not identify partial differentiation variables.
+        if (isinstance(self.expr, Derivative) and has_dups(self.point)
+                and all(v.is_Symbol for v in self.variables)):
+            variables = list(dict.fromkeys(v for v in preorder_traversal(self.expr)
+                                          if v in self.variables))
+            variables.extend(ordered(v for v in self.variables if v not in variables))
+            canonical = Lambda(tuple(variables), self.expr).canonical_variables
+            canonical = {v: Symbol(d.name, commutative=v.is_commutative)
+                         for v, d in canonical.items()}
+            expr = self.expr.xreplace(canonical)
+            if isinstance(expr, Derivative):
+                expr = expr.canonical
+            points = Tuple(*(self.point[self.variables.index(v)] for v in variables))
+            return (True, expr, Tuple(*canonical.values()), points) + unused
+        return (False, self._expr.xreplace(self.canonical_variables)) + unused
 
     def _eval_subs(self, old, new):
         # Subs doit will do the variables in order; the semantics
